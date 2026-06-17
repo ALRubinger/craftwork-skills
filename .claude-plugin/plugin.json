@@ -1,0 +1,11 @@
+{
+  "name": "craftwork",
+  "version": "0.1.0",
+  "description": "CraftWork: turn lived-experience feedback into merged PRs via a GitHub-backed autonomous loop that engages you only at genuine decision points.",
+  "author": {
+    "name": "Andrew Lee Rubinger",
+    "url": "https://github.com/ALRubinger"
+  },
+  "homepage": "https://github.com/ALRubinger/craftwork-skills",
+  "keywords": ["claude-code", "agent-skills", "automation", "github", "autonomous-agents"]
+}

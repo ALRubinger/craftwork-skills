@@ -1,0 +1,19 @@
+{
+  "name": "craftwork-skills",
+  "owner": {
+    "name": "Andrew Lee Rubinger",
+    "url": "https://github.com/ALRubinger"
+  },
+  "metadata": {
+    "description": "CraftWork: a GitHub-backed loop that turns lived-experience feedback into merged PRs, asking you only at genuine decision points.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "craftwork",
+      "source": "./",
+      "description": "Capture an observation, let the loop ship it, decide only the forks it cannot. cw-feedback / cw-ship / cw-resolve plus the cw-scope / cw-orchestrate / cw-sweep initiative track.",
+      "version": "0.1.0"
+    }
+  ]
+}
