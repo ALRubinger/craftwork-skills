@@ -64,6 +64,28 @@ Or as a Claude Code plugin marketplace:
 
 The autonomous skills (`cw-ship`, `cw-orchestrate`, `cw-sweep`) drive real merges via `gh`/`git` and are designed to run unattended on a schedule. Read each skill's `SKILL.md` before wiring it to a cron, and start with a dry run.
 
+## Scheduling the autonomous loops
+
+A loop is just a slash command. To run one unattended, have any agent runtime execute it **non-interactively, on a timer**. Nothing here is Claude-specific beyond the example invocation; any runtime that can run a skill headlessly plus any scheduler gives you the loop.
+
+**1. Local cron / launchd / systemd → headless agent.** Point your OS scheduler at a one-line wrapper that runs the skill headlessly. With Claude Code that is:
+
+```sh
+claude -p "/cw-ship <owner>/<repo>"
+```
+
+Fire it from cron (`13 9 * * *`), a macOS LaunchAgent, or a systemd timer. The skill holds its own run lock and is idempotent, so overlapping or retried runs are safe. A complete worked example — wrapper, plist, retry loop, permission notes — is in [`skills/cw-ship/references/scheduling.md`](skills/cw-ship/references/scheduling.md) (written for the author's macOS setup; adapt the paths and repo). For another agent, substitute its non-interactive invocation for `claude -p`.
+
+**2. GitHub Actions cron (repo-native, no laptop required).** A scheduled workflow that runs the agent in CI — best for teams, or when you do not want the loop tied to one machine. Use [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action) (or your agent's equivalent action) on a `schedule:` trigger. The runner needs a token with merge rights, and the bot identity must be allowed to bypass required review.
+
+**3. Managed cloud routine.** If your platform offers scheduled agent runs (e.g. Claude Code's `/schedule`), point one at the loop command. These usually enforce a minimum interval (around an hour) and are billed.
+
+**Safety, however you schedule it:**
+
+- These skills perform real merges. **Scope the agent's auth to the target repo** and start with a dry run (`cw-ship` accepts `build: false` to plan and park without opening PRs).
+- In a headless run, **do not override the permission mode in a way that re-introduces interactive prompts** — a prompt with no human to answer it hangs the loop. Rely on a pre-approved allowlist instead.
+- The everyday loop pages you (`cw-ship` fires a notification when it parks a decision), so an unattended schedule still keeps you in the loop exactly when a human judgment is needed — and only then.
+
 ## Status
 
 Early. Versioned at `0.1.0`. The skill contracts are stable enough to use; the packaging for one-command install is still settling. Issues and ideas welcome.
