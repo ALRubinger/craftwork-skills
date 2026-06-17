@@ -26,7 +26,7 @@ The design mirror is deliberate: this is to `cw-orchestrate` what a self-driving
 
 ## When to Use
 
-On a schedule (the default — see [references/scheduling.md](./references/scheduling.md)) or on demand to process the feedback backlog: "triage the feedback issues", "run the feedback loop", "act on the feedback for ALRubinger/aileron". Do **not** use it to capture new feedback (that's `/cw-feedback`) or to execute an existing umbrella (that's `/cw-orchestrate`).
+On a schedule (the default — see [references/scheduling.md](./references/scheduling.md)) or on demand to process the feedback backlog: "triage the feedback issues", "run the feedback loop", "act on the feedback for <owner>/<repo>". Do **not** use it to capture new feedback (that's `/cw-feedback`) or to execute an existing umbrella (that's `/cw-orchestrate`).
 
 ## Prerequisites
 
@@ -63,7 +63,7 @@ Invoke the **Workflow** tool with `scriptPath` pointing at this skill's `workflo
 
 ```json
 {
-  "repo": "ALRubinger/aileron",
+  "repo": "<owner>/<repo>",
   "defaultBranch": "main",
   "only": null,
   "build": true
@@ -90,7 +90,7 @@ The Workflow returns:
 
 ```json
 {
-  "repo": "ALRubinger/aileron",
+  "repo": "<owner>/<repo>",
   "planned": [{ "issue": 130, "route": "fix", "disposition": "build" }],
   "built": [{ "issue": 130, "pr": "https://github.com/.../pull/NNN", "merged": true, "cause": null }],
   "umbrellas_filed": [{ "feedback_issue": 141, "umbrella": 142, "url": "...", "sub_issues": [143, 144] }],
