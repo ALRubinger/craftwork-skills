@@ -52,22 +52,22 @@ test('unknown dependency target is rejected', () => {
   assert.throws(() => computeWaves(nodes), /unknown issue #999/);
 });
 
-// AE6: the #989 agent-auth shape. #984/#985/#986 declare a logical dep on #981
-// and share the vault area with #981 (so they follow it), but do NOT overlap
-// one another in this fixture, so they share wave 2. Independents fill wave 1.
+// AE6: a realistic umbrella shape. #984/#985/#986 each declare a logical dep on
+// #981 (so they follow it) but do NOT overlap one another in this fixture, so
+// they share wave 2. The independents (incl. the linchpin #981) fill wave 1.
 test('AE6: #989 shape yields the documented waves', () => {
   const nodes = [
     // Wave 1 — independents + the linchpin #981.
-    { issue: 980, ownership_paths: ['internal/agent/shutdown.go'], depends_on: [] },
-    { issue: 981, ownership_paths: ['cmd/aileron/vault.go', 'internal/api/openapi.yaml'], depends_on: [] },
-    { issue: 982, ownership_paths: ['internal/agent/authspec_goose.go'], depends_on: [] },
-    { issue: 983, ownership_paths: ['internal/agent/host_launch.go'], depends_on: [] },
-    { issue: 987, ownership_paths: ['internal/agent/claude_env.go'], depends_on: [] },
-    { issue: 988, ownership_paths: ['test/bindmount_test.go'], depends_on: [] },
+    { issue: 980, ownership_paths: ['internal/server/shutdown.go'], depends_on: [] },
+    { issue: 981, ownership_paths: ['cmd/items.go', 'internal/api/openapi.yaml'], depends_on: [] },
+    { issue: 982, ownership_paths: ['internal/server/authspec.go'], depends_on: [] },
+    { issue: 983, ownership_paths: ['internal/server/launch.go'], depends_on: [] },
+    { issue: 987, ownership_paths: ['internal/server/env.go'], depends_on: [] },
+    { issue: 988, ownership_paths: ['test/mount_test.go'], depends_on: [] },
     // Wave 2 — depend on #981, no mutual overlap among themselves.
-    { issue: 984, ownership_paths: ['internal/agent/freshness.go'], depends_on: [981] },
-    { issue: 985, ownership_paths: ['internal/audit/vault_events.go'], depends_on: [981] },
-    { issue: 986, ownership_paths: ['cmd/aileron/auth_import.go'], depends_on: [981] },
+    { issue: 984, ownership_paths: ['internal/server/freshness.go'], depends_on: [981] },
+    { issue: 985, ownership_paths: ['internal/audit/events.go'], depends_on: [981] },
+    { issue: 986, ownership_paths: ['cmd/import.go'], depends_on: [981] },
   ];
   const waves = computeWaves(nodes);
   assert.equal(waves.length, 2, 'expected exactly two waves');

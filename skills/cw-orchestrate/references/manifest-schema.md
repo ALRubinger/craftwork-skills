@@ -33,13 +33,13 @@ Briefs and the manifest live under a **run-scoped working directory addressed by
   "issues": [
     {
       "number": 981,
-      "title": "aileron vault put/delete/list CLI + daemon DELETE endpoint",
+      "title": "Add DELETE /items/{id} endpoint + items rm CLI command",
       "brief_path": "/abs/path/.cw-orchestrate/umbrella-989-20260611-1713/briefs/981.md",
       "depends_on": []
     },
     {
       "number": 984,
-      "title": "Capture freshness comparison + vault-delete resurrection mitigation",
+      "title": "Add a soft-delete recovery window for deleted items",
       "brief_path": "/abs/path/.../briefs/984.md",
       "depends_on": [981]
     }
@@ -78,7 +78,7 @@ One markdown file per sub-issue, written by the sweep, read by the plan subagent
 ```markdown
 ---
 issue: 981
-title: "aileron vault put/delete/list CLI + daemon DELETE endpoint"
+title: "Add DELETE /items/{id} endpoint + items rm CLI command"
 route: ready            # ready | clarify-now | back-off
 umbrella: 989
 ---
@@ -94,8 +94,8 @@ umbrella: 989
 
 ## Constraints
 - <umbrella-wide or repo-family constraint the planner must honor —
-  e.g. write endpoints carry [approval] gating per ADR-0009 and an
-  idempotency flag per ADR-0010; OpenAPI spec is source of truth.>
+  e.g. write endpoints require [approval] gating and an idempotency
+  flag per the repo's ADRs; the API spec is the source of truth.>
 
 ## Accepted gaps
 - <gap the operator explicitly chose to leave to the planner, if any>
@@ -112,10 +112,10 @@ A back-off issue's brief links its `ce-brainstorm` requirements doc instead of r
 ```markdown
 ---
 issue: 986
-title: "aileron auth <agent> --import-from-host"
+title: "Bulk item import from a CSV file"
 route: back-off
 umbrella: 989
-brainstorm: docs/brainstorms/2026-06-11-986-import-from-host-requirements.md
+brainstorm: docs/brainstorms/2026-06-11-986-bulk-import-requirements.md
 ---
 
 # Readiness brief: #986
@@ -123,7 +123,7 @@ brainstorm: docs/brainstorms/2026-06-11-986-import-from-host-requirements.md
 This issue was routed to back-off during the sweep. Its requirements were
 established in `ce-brainstorm`:
 
-→ docs/brainstorms/2026-06-11-986-import-from-host-requirements.md
+→ docs/brainstorms/2026-06-11-986-bulk-import-requirements.md
 
 The plan subagent should treat that document as the authoritative requirements
 input. Decisions, constraints, and acceptance examples live there.
