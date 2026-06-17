@@ -55,7 +55,7 @@ Invoke the **Workflow** tool with `scriptPath` pointing at this skill's `workflo
 
 ```json
 {
-  "repo": "ALRubinger/aileron",
+  "repo": "<owner>/<repo>",
   "defaultBranch": "main",
   "umbrella": 989,
   "only": null,
@@ -79,7 +79,7 @@ The Workflow returns:
 
 ```json
 {
-  "repo": "ALRubinger/aileron",
+  "repo": "<owner>/<repo>",
   "triaged": [{ "residual_issue": 1000, "sub_issue": 986, "shipped": true, "closed": true, "disposition": "close-now" }],
   "autofixed": [{ "residual_issue": 992, "pr": "https://github.com/.../pull/NNN", "merged": true, "cause": null }],
   "escalations": [{ "residual_issue": 1010, "sub_issue": 984, "title": "...", "verdict": "DECISION", "confidence": null, "rationale": "..." }],

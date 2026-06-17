@@ -28,7 +28,7 @@ have one, but say it's a hint.>
 ## Context
 
 - **Repo:** <owner/name>
-- **Surface:** <product surface, e.g. `aileron launch`, webapp, slack connector, docs> (or "unknown")
+- **Surface:** <product surface, e.g. a CLI command, web app, an API endpoint, docs> (or "unknown")
 - **Where seen:** <command / page / flow, verbatim if the user named it> (or "n/a")
 - **Kind:** <bug | annoyance | enhancement | idea>
 

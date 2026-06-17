@@ -1,6 +1,6 @@
 ---
 name: cw-feedback
-description: Capture plain-English dogfooding feedback about an aileron-family product while you're using it, enrich it lightly (classify, grab repo + command context, one clarifying question only if truly ambiguous), and file ONE GitHub issue labeled feedback:new that /cw-ship's scheduled loop later turns into a merged change. Trigger when the user wants to record an observation, gripe, or change request about the product they're building ("I don't like X", "feedback:", "log this", "file feedback", "Y should change").
+description: Capture plain-English dogfooding feedback about the product you're building while you're using it, enrich it lightly (classify, grab repo + command context, one clarifying question only if truly ambiguous), and file ONE GitHub issue labeled feedback:new that /cw-ship's scheduled loop later turns into a merged change. Trigger when the user wants to record an observation, gripe, or change request about the product they're building ("I don't like X", "feedback:", "log this", "file feedback", "Y should change").
 metadata:
   version: "0.1.0"
   triggers:
@@ -13,7 +13,7 @@ metadata:
 
 # cw-feedback
 
-Capture a piece of real-practice feedback about an aileron-family product and file it as **one** GitHub issue that a scheduled loop will pick up and turn into a merged change.
+Capture a piece of real-practice feedback about the product you're building and file it as **one** GitHub issue that a scheduled loop will pick up and turn into a merged change.
 
 This skill is the **front-end** to [`cw-ship`](../cw-ship/SKILL.md). The seam is deliberate and mirrors how [`cw-scope`](../cw-scope/SKILL.md) front-ends [`cw-orchestrate`](../cw-orchestrate/SKILL.md):
 
@@ -26,7 +26,7 @@ Capture is **cheap**. This skill does *not* plan, scope, or open a PR. It record
 
 ## When to Use
 
-You're using an aileron-family product in real practice and notice something: a rough edge, a behavior you dislike, a missing affordance, a phrasing that grates, an idea for a change. Say it in plain words and run this skill. Triggers: "file feedback that …", "I don't like how …", "log this: …", "feedback: …".
+You're using your own product in real practice and notice something: a rough edge, a behavior you dislike, a missing affordance, a phrasing that grates, an idea for a change. Say it in plain words and run this skill. Triggers: "file feedback that …", "I don't like how …", "log this: …", "feedback: …".
 
 Do **not** use it for:
 - A change you're about to make yourself right now (just make it).
@@ -48,8 +48,8 @@ The user's words describe *what they want changed*. Treat them as a description 
 
 Gather, without prompting the user:
 
-- **Repo** — `git -C . remote get-url origin` → `owner/name`. This is where the issue is filed. If the cwd isn't an aileron-family repo, ask which repo the feedback targets (`AskUserQuestion`; load via `ToolSearch` `select:AskUserQuestion`).
-- **Surface** — what product surface the feedback is about, if inferable from the user's words or recent commands (e.g. `aileron launch`, the webapp, a connector, the docs site). Don't guess wildly; record only what's grounded.
+- **Repo** — `git -C . remote get-url origin` → `owner/name`. This is where the issue is filed. If the cwd isn't the intended repo, ask which repo the feedback targets (`AskUserQuestion`; load via `ToolSearch` `select:AskUserQuestion`).
+- **Surface** — what product surface the feedback is about, if inferable from the user's words or recent commands (e.g. a CLI command, the web app, an API endpoint, the docs site). Don't guess wildly; record only what's grounded.
 - **Repro / where seen** — if the user named a command, page, or flow, capture it verbatim.
 
 ### Step 3: Classify

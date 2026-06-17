@@ -35,7 +35,7 @@ Do **not** use for a single issue (just plan + work it directly), or when the us
 
 ### Required state
 - A GitHub repo with a parent issue that has open sub-issues.
-- Standing PR-shepherd authorization for this repo family (squash-merge with `--admin`, `--force-with-lease` rebase, branch-deletion verification). See `~/.claude/CLAUDE.md` and the repo-family `CLAUDE.md`.
+- Standing PR-shepherd authorization for this repo family (squash-merge with `--admin`, `--force-with-lease` rebase, branch-deletion verification). See your repo's merge conventions (e.g. an `AGENTS.md` / `CLAUDE.md`).
 
 ### Reference files (this skill)
 - [references/readiness-sweep.md](./references/readiness-sweep.md) — sweep routing + brief-completeness gate
@@ -102,7 +102,7 @@ Write the manifest per [references/manifest-schema.md](./references/manifest-sch
 ```json
 {
   "umbrella": 989,
-  "repo": "ALRubinger/aileron",
+  "repo": "<owner>/<repo>",
   "defaultBranch": "main",
   "runId": "umbrella-989-20260611-1713",
   "timestamp": "2026-06-11T17:13:00Z",

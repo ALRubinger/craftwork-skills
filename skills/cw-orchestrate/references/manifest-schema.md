@@ -26,7 +26,7 @@ Briefs and the manifest live under a **run-scoped working directory addressed by
 ```json
 {
   "umbrella": 989,
-  "repo": "ALRubinger/aileron",
+  "repo": "<owner>/<repo>",
   "defaultBranch": "main",
   "runId": "umbrella-989-20260611-1713",
   "timestamp": "2026-06-11T17:13:00Z",
