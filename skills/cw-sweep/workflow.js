@@ -234,6 +234,10 @@ Repo ${a.repo}, base ${a.defaultBranch}. Implement EXACTLY these triaged fixes a
 ${JSON.stringify(highConfidenceFixes(tr).map((f) => ({ title: f.title, fix_hint: f.fix_hint, rationale: f.rationale })), null, 2)}
 \`\`\`
 
+FRESHNESS PRE-CHECK — do this FIRST, before branching or writing any code. The triage that produced these fixes is a snapshot and may be stale: between triage and now, a parallel PR or another session can close the residual or land an equivalent fix on \`${a.defaultBranch}\`. Building a PR for already-done work burns a PR + CI cycle for nothing — this check prevents exactly that.
+- a. Confirm the residual is still OPEN: \`gh issue view ${tr.residual_issue} --repo ${a.repo} --json state,closedByPullRequestsReferences\`. If it is CLOSED, STOP: do not branch or open a PR; report ready_to_merge:false, cause "residual #${tr.residual_issue} already closed since triage".
+- b. \`git fetch origin ${a.defaultBranch} -q\`, then for each listed fix read the file(s) it would touch at fresh \`origin/${a.defaultBranch}\` HEAD and DROP any whose change is already present (an equivalent guard/test/code merged since triage — search for the symbol/test name, do not assume). If EVERY listed fix is already on \`${a.defaultBranch}\`, STOP: report ready_to_merge:false, cause "fixes already landed on ${a.defaultBranch} (equivalent work merged since triage)". Otherwise proceed with ONLY the fixes that are genuinely still needed.
+
 Steps:
 1. Branch off fresh \`${a.defaultBranch}\` in your worktree.
 2. Implement ONLY the listed fixes. Stay strictly in scope. If a "fix" turns out to be larger, ambiguous, or riskier than its description, SKIP it and record that in \`cause\` rather than expanding scope or guessing.
