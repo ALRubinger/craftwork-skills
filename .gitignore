@@ -1,3 +1,7 @@
 .DS_Store
 node_modules/
 *.log
+
+# Transient Workflow run artifacts (worktrees + orchestrate scratch) — never commit.
+.claude/worktrees/
+.cw-orchestrate/
