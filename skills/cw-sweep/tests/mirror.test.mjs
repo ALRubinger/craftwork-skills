@@ -45,6 +45,7 @@ for (const fn of [
   'highConfidenceFixes',
   'autofixCandidates',
   'escalations',
+  'parkCandidates',
   'deferredResiduals',
 ]) {
   test(`workflow.js mirror of ${fn} matches triage.mjs`, () => {

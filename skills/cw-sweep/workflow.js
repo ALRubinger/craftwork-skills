@@ -23,6 +23,7 @@ export const meta = {
     { title: 'Discover', detail: 'list open review-residual issues and map each to its sub-issue' },
     { title: 'Triage', detail: 'per residual: classify vs shipped code; close resolved/moot' },
     { title: 'Autofix', detail: 'high-confidence FIX_NOW findings -> PR -> serial merge (opt-in)' },
+    { title: 'Park', detail: 'write a "## Decision needed" block + needs-input label for residuals with judgment calls' },
   ],
 };
 
@@ -40,7 +41,7 @@ const DISCOVER_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['residual_issue', 'residual_url', 'sub_issue'],
+        required: ['residual_issue', 'residual_url', 'sub_issue', 'human_state'],
         properties: {
           residual_issue: { type: 'integer' },
           residual_url: { type: 'string', minLength: 1 },
@@ -48,6 +49,11 @@ const DISCOVER_SCHEMA = {
           relates_to: { type: ['integer', 'null'] }, // the immediate "Relates to #n" target
           chain: { type: 'array', items: { type: 'integer' } }, // immediate -> ... -> feature
           umbrella: { type: ['integer', 'null'] },
+          // Where this residual sits in the park/resolve/go loop, from its labels:
+          //   fresh       — no human-loop label; triage normally, park if decisions remain.
+          //   needs-input — parked, awaiting the operator; SKIP (do not re-triage/clobber).
+          //   go          — operator answered inline; triage in CONSUME mode (read answers).
+          human_state: { type: 'string', enum: ['fresh', 'needs-input', 'go'] },
         },
       },
     },
@@ -76,6 +82,11 @@ const TRIAGE_SCHEMA = {
           confidence: { type: 'string', enum: ['high', 'low'] },
           rationale: { type: 'string' },
           fix_hint: { type: ['string', 'null'] },
+          // Required-in-prose on human-needed findings (DECISION / low-conf FIX_NOW):
+          // the recommendation-first question shown inline and written into the park block.
+          decision_question: { type: ['string', 'null'] },
+          recommended_answer: { type: ['string', 'null'] },
+          alt_options: { type: 'array', items: { type: 'string' } },
         },
       },
     },
@@ -109,6 +120,16 @@ const MERGE_SCHEMA = {
     branch_gone: { type: ['boolean', 'null'] },
     ci_green: { type: ['boolean', 'null'] },
     cause: { type: ['string', 'null'] },
+  },
+};
+
+const PARK_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['issue', 'parked'],
+  properties: {
+    issue: { type: 'integer' },
+    parked: { type: 'boolean' },
   },
 };
 
@@ -149,6 +170,7 @@ function autofixCandidates(results) {
 function escalations(results) {
   const out = [];
   for (const r of (results || []).filter(Boolean)) {
+    if (r.shipped === false) continue;
     for (const f of r.findings || []) {
       const needsHuman =
         f.verdict === 'DECISION' || (f.verdict === 'FIX_NOW' && f.confidence !== 'high');
@@ -161,11 +183,28 @@ function escalations(results) {
           verdict: f.verdict,
           confidence: f.confidence || null,
           rationale: f.rationale || '',
+          decision_question: f.decision_question || f.title,
+          recommended_answer: f.recommended_answer || null,
+          alt_options: f.alt_options || [],
         });
       }
     }
   }
   return out.sort((a, b) => a.residual_issue - b.residual_issue);
+}
+
+function parkCandidates(results) {
+  return (results || [])
+    .filter(Boolean)
+    .filter(
+      (r) =>
+        r.shipped !== false &&
+        (r.findings || []).some(
+          (f) => f.verdict === 'DECISION' || (f.verdict === 'FIX_NOW' && f.confidence !== 'high'),
+        ),
+    )
+    .map((r) => r.residual_issue)
+    .sort((a, b) => a - b);
 }
 
 function deferredResiduals(results) {
@@ -192,22 +231,34 @@ ${
 }
 
 Steps:
-1. List candidates: \`gh issue list --repo ${a.repo} --state open --label review-residual --limit 200 --json number,title,body\`${Array.isArray(a.only) && a.only.length ? ` (or fetch the named numbers directly with \`gh issue view\` and confirm the label).` : '.'}
+1. List candidates: \`gh issue list --repo ${a.repo} --state open --label review-residual --limit 200 --json number,title,body,labels\`${Array.isArray(a.only) && a.only.length ? ` (or fetch the named numbers directly with \`gh issue view\` and confirm the label).` : '.'}
 2. For each in-scope residual, resolve the underlying FEATURE issue it ultimately concerns. Residual titles are always "review-residual: plan findings for #<n>", and the body carries a matching "Relates to #<n>" line.
    a. The immediate target is that #<n>.
    b. If the immediate target is ITSELF a review-residual issue (its title begins "review-residual:" or it carries the review-residual label), this is a NESTED adoption: a later cw-orchestrate run adopted an older residual as a sub-issue. Read that issue's title "plan findings for #<m>" and follow to #<m>. Repeat until you reach an issue that is NOT a review-residual issue — that terminal issue is the underlying feature. Use \`gh issue view <n> --repo ${a.repo} --json title,labels\` to test each hop.
    c. Record the full chain of issue numbers walked, the immediate target as relates_to, and the terminal feature as sub_issue. (If the immediate target is already a feature, chain is just [feature] and relates_to == sub_issue.)
    Guard against loops: stop after a reasonable number of hops and, if you cannot reach a non-residual feature, set sub_issue to the last issue in the chain.
 3. Parse the umbrella number (the "Umbrella #<n>" line, or null if absent). Build residual_url as https://github.com/${a.repo}/issues/<number>.
+4. Classify each residual's human_state from its labels (the park/resolve/go loop):
+   - "go"          if it carries the "review-residual:go" label (the operator answered the parked decisions inline; it will be triaged in consume mode).
+   - "needs-input" else if it carries "review-residual:needs-input" (parked, still awaiting the operator; it will be skipped this run, not re-triaged).
+   - "fresh"       otherwise.
 
-Return ONLY in-scope residuals. Return structured output: { residuals: [{ residual_issue, residual_url, sub_issue, relates_to, chain, umbrella }] }.`;
+Return ONLY in-scope residuals. Return structured output: { residuals: [{ residual_issue, residual_url, sub_issue, relates_to, chain, umbrella, human_state }] }.`;
 
-const triagePrompt = (a, subIssue, residualUrl, chain) => `You are triaging a "review-residual" issue against the SHIPPED code on ${a.defaultBranch}, headless, with no human. These residuals were filed against an implementation PLAN; re-judge each finding against what actually landed, then act on the cheap/clear ones and leave only genuine judgment calls for a human.
+const triagePrompt = (a, subIssue, residualUrl, chain, mode) => `You are triaging a "review-residual" issue against the SHIPPED code on ${a.defaultBranch}, headless, with no human. These residuals were filed against an implementation PLAN; re-judge each finding against what actually landed, then act on the cheap/clear ones and leave only genuine judgment calls for a human.
 
 Repo ${a.repo}, default branch ${a.defaultBranch}.
 Residual issue: ${residualUrl}
 Underlying feature: #${subIssue}${Array.isArray(chain) && chain.length > 1 ? `\nResolved through a nested residual chain: ${chain.map((n) => '#' + n).join(' -> ')} — the residual tracks an earlier residual that ultimately concerns the feature. Triage the findings against the feature's code, using the intermediate residuals/PRs only as context.` : ''}
-
+${
+  mode === 'consume'
+    ? `\nCONSUME MODE: this residual was parked for a decision and the operator has now ANSWERED (label review-residual:go). Its body has a "## Decision needed" block whose entries each carry an "**Answer:** <decision>" line. Treat each answer as the SETTLED decision and re-classify the finding it answers:
+- answer accepts current behavior / "leave as-is" / "no change" => RESOLVED (or MOOT if the finding no longer applies).
+- answer specifies a change ("do X", "use Y") => FIX_NOW, confidence "high" (the operator authorized this exact change), fix_hint = the operator's specified change.
+- answer is genuinely ambiguous or raises a NEW fork => keep DECISION (it will re-park) and emit fresh decision_question/recommended_answer/alt_options.
+Findings with NO operator answer are re-judged normally (below). Leave the review-residual:go label in place — closing the residual (now or via the autofix PR) clears it, a re-park flips it to needs-input, and if it stays open for autofix a re-run re-consumes the same answers idempotently. Do not remove it by hand.\n`
+    : ''
+}
 Steps:
 1. Read the residual body (\`gh issue view ${residualUrl} --json title,body\`) and extract its findings.
 2. Determine whether the feature #${subIssue} has SHIPPED — i.e. its code is on ${a.defaultBranch} now. Try these in order and stop at the first that resolves it:
@@ -220,12 +271,44 @@ Steps:
    - FIX_NOW  — a real, small, unambiguous fix. Set confidence "high" only if you are sure the fix is correct, safe, and in-scope (it will be applied and merged with NO human review). Any ambiguity about correctness, scope, or approach => "low".
    - DECISION — needs a human judgment call (a real trade-off, a product/behavior choice, or a fix whose correct form is unclear). Reserve it for genuine choices.
    - MOOT     — the finding was wrong, or the implementation diverged so it no longer applies.
+   For EVERY finding you mark DECISION or low-confidence FIX_NOW (i.e. anything that will reach a human), ALSO set these so the operator can be asked with a recommendation-first prompt and the decision can be parked verbatim:
+     - decision_question  — one crisp line stating the choice the operator must make (outcome-framed, not implementation minutiae).
+     - recommended_answer — your single best answer (becomes the first, "(Recommended)" option). Make a real call; only say it's a toss-up if it genuinely is.
+     - alt_options        — 1-3 realistic alternative answers, each a short outcome-framed label.
+   Leave these null/empty on RESOLVED, MOOT, and high-confidence FIX_NOW findings.
 4. Post ONE triage comment on the residual summarizing each finding's verdict + one-line rationale (\`gh issue comment ${residualUrl} --body-file <(...)\`).
 5. CLOSE the residual ONLY if every finding is RESOLVED or MOOT (no action remains): \`gh issue close ${residualUrl} --comment "Triaged: all findings resolved in shipped code or moot. <one line>"\` and set closed:true. Otherwise leave it open (high-confidence FIX_NOW findings are auto-fixed in a later sweep; DECISION / low-confidence findings await a human) and set closed:false.
 
 Be conservative about closing and about high-confidence: closing a real issue or auto-merging a wrong fix is worse than leaving a residual open for a human.
 
-Return structured output: { residual_issue, sub_issue, shipped, closed, findings: [{title, severity, verdict, confidence, rationale, fix_hint}] }. Set sub_issue to the underlying feature #${subIssue}.`;
+Return structured output: { residual_issue, sub_issue, shipped, closed, findings: [{title, severity, verdict, confidence, rationale, fix_hint, decision_question, recommended_answer, alt_options}] }. Set sub_issue to the underlying feature #${subIssue}.`;
+
+const decisionFindings = (tr) =>
+  ((tr && tr.findings) || []).filter(
+    (f) => f.verdict === 'DECISION' || (f.verdict === 'FIX_NOW' && f.confidence !== 'high'),
+  );
+
+const parkResidualPrompt = (a, tr, residualUrl) => `You are PARKING one review-residual issue for the operator's input, using gh via Bash. Repo ${a.repo}. Residual: ${residualUrl} (#${tr.residual_issue}, feature #${tr.sub_issue}). Its findings against the shipped code include genuine judgment calls only the operator should make.
+
+Steps:
+1. Fetch the current body: \`gh issue view ${tr.residual_issue} --repo ${a.repo} --json body -q .body > body.md\`.
+2. Write the decisions into body.md as a "## Decision needed" block — one numbered entry per decision below, each showing the question, your recommended answer, and the alternatives. If a "## Decision needed" block already exists (a prior park), REPLACE it in place rather than appending a second one. The decisions:
+\`\`\`json
+${JSON.stringify(
+  decisionFindings(tr).map((f) => ({
+    question: f.decision_question || f.title,
+    recommended: f.recommended_answer || null,
+    alternatives: f.alt_options || [],
+  })),
+  null,
+  2,
+)}
+\`\`\`
+   End the block with: "_To proceed: answer each decision inline above, then add the \\\`review-residual:go\\\` label (or run /cw-resolve). The next cw-sweep run applies your answers._"
+   Use \`gh issue edit ${tr.residual_issue} --repo ${a.repo} --body-file body.md\` (never hand-escape backticks or checklists).
+3. Flip labels to the parked state: \`gh issue edit ${tr.residual_issue} --repo ${a.repo} --add-label review-residual:needs-input --remove-label review-residual:go\` (create review-residual:needs-input first if missing: color D93F0B). Do NOT add review-residual:go — that is the operator's action.
+
+Return structured output: { issue: ${tr.residual_issue}, parked: true }.`;
 
 const autofixPrompt = (a, tr) => `You are implementing ONLY a set of small, high-confidence cleanup fixes for review-residual #${tr.residual_issue} (sub-issue #${tr.sub_issue}) in an isolated git worktree, headless, with no human. Do NOT merge; the orchestrator merges serially after you return.
 
@@ -293,19 +376,33 @@ const discovered = await agent(discoverPrompt(cfg), {
 const residuals = (discovered && discovered.residuals) || [];
 log(`Discovered ${residuals.length} open review-residual issue(s).`);
 if (residuals.length === 0) {
-  return { repo: cfg.repo, triaged: [], autofixed: [], escalations: [], deferred_residuals: [] };
+  return { repo: cfg.repo, triaged: [], autofixed: [], parked: [], escalations: [], awaiting_input: [], deferred_residuals: [] };
+}
+
+// Route by park/resolve/go state: triage fresh + answered (go, in consume mode);
+// leave residuals still awaiting the operator (needs-input) untouched.
+const awaitingInput = residuals
+  .filter((r) => r.human_state === 'needs-input')
+  .map((r) => r.residual_issue)
+  .sort((a, b) => a - b);
+const toTriage = residuals.filter((r) => r.human_state !== 'needs-input');
+if (awaitingInput.length) {
+  log(`Skipping ${awaitingInput.length} residual(s) awaiting operator input: ${awaitingInput.join(', ')}.`);
 }
 
 // --- Triage (classify + close), one subagent per residual, in parallel -----
 phase('Triage');
 const triageResults = (
   await parallel(
-    residuals.map((r) => () =>
-      agent(triagePrompt(cfg, r.sub_issue, r.residual_url, r.chain || []), {
-        label: `triage:${r.residual_issue}`,
-        phase: 'Triage',
-        schema: TRIAGE_SCHEMA,
-      }),
+    toTriage.map((r) => () =>
+      agent(
+        triagePrompt(cfg, r.sub_issue, r.residual_url, r.chain || [], r.human_state === 'go' ? 'consume' : 'fresh'),
+        {
+          label: `triage:${r.residual_issue}`,
+          phase: 'Triage',
+          schema: TRIAGE_SCHEMA,
+        },
+      ),
     ),
   )
 ).filter(Boolean);
@@ -351,6 +448,30 @@ if (runAutofix) {
   }
 }
 
+// --- Park decisions: write the "## Decision needed" block + needs-input -----
+// Durable park for the operator. Headless runs leave these waiting for /cw-resolve;
+// an interactive caller drains them immediately from report.escalations.
+const parked = [];
+phase('Park');
+const parkQueue = parkCandidates(triageResults);
+log(`Park queue: ${parkQueue.length} residual(s) with judgment calls.`);
+if (parkQueue.length) {
+  const parkResults = await parallel(
+    parkQueue.map((residualIssue) => () => {
+      const tr = triageResults.find((t) => t.residual_issue === residualIssue);
+      const url = `https://github.com/${cfg.repo}/issues/${residualIssue}`;
+      return agent(parkResidualPrompt(cfg, tr, url), {
+        label: `park:${residualIssue}`,
+        phase: 'Park',
+        schema: PARK_SCHEMA,
+      });
+    }),
+  );
+  for (const p of parkResults.filter(Boolean)) {
+    if (p.parked) parked.push(p.issue);
+  }
+}
+
 // --- Report ----------------------------------------------------------------
 const report = {
   repo: cfg.repo,
@@ -362,12 +483,15 @@ const report = {
     disposition: closeDisposition(t),
   })),
   autofixed,
+  parked: parked.sort((a, b) => a - b),
   escalations: escalations(triageResults),
+  awaiting_input: awaitingInput,
   deferred_residuals: deferredResiduals(triageResults),
 };
 log(
   `Done. triaged=${report.triaged.length} closed=${report.triaged.filter((t) => t.closed).length} ` +
     `autofixed=${report.autofixed.filter((a) => a.merged).length}/${report.autofixed.length} ` +
-    `escalations=${report.escalations.length} deferred=${report.deferred_residuals.length}`,
+    `parked=${report.parked.length} escalations=${report.escalations.length} ` +
+    `awaiting=${report.awaiting_input.length} deferred=${report.deferred_residuals.length}`,
 );
 return report;

@@ -5,6 +5,7 @@ import {
   highConfidenceFixes,
   autofixCandidates,
   escalations,
+  parkCandidates,
   deferredResiduals,
 } from '../triage.mjs';
 
@@ -69,6 +70,68 @@ test('escalations: DECISION and low-conf FIX_NOW surface, residual-ascending', (
   assert.equal(esc.length, 2);
   assert.equal(esc[0].residual_issue, 7);
   assert.equal(esc[1].residual_issue, 12);
+});
+
+test('escalations: unshipped residuals are excluded (deferral != decision)', () => {
+  const results = [
+    { residual_issue: 8, sub_issue: 80, shipped: false, findings: [f('DECISION', null)] },
+    { residual_issue: 9, sub_issue: 90, shipped: true, findings: [f('DECISION', null)] },
+  ];
+  const esc = escalations(results);
+  assert.equal(esc.length, 1);
+  assert.equal(esc[0].residual_issue, 9);
+});
+
+test('escalations: carries the recommendation-first question fields', () => {
+  const results = [
+    {
+      residual_issue: 11,
+      sub_issue: 100,
+      findings: [
+        f('DECISION', null, {
+          decision_question: 'Repeat the banner each run?',
+          recommended_answer: 'Show once per session',
+          alt_options: ['Always show', 'Never show'],
+        }),
+      ],
+    },
+  ];
+  const [e] = escalations(results);
+  assert.equal(e.decision_question, 'Repeat the banner each run?');
+  assert.equal(e.recommended_answer, 'Show once per session');
+  assert.deepEqual(e.alt_options, ['Always show', 'Never show']);
+});
+
+test('escalations: question fields default sanely when the planner omits them', () => {
+  const [e] = escalations([
+    { residual_issue: 3, sub_issue: 30, findings: [f('DECISION', null, { title: 'Pick a name' })] },
+  ]);
+  assert.equal(e.decision_question, 'Pick a name'); // falls back to the finding title
+  assert.equal(e.recommended_answer, null);
+  assert.deepEqual(e.alt_options, []);
+});
+
+test('parkCandidates: shipped residuals with judgment calls, ascending', () => {
+  const results = [
+    { residual_issue: 30, shipped: true, findings: [f('FIX_NOW', 'low')] }, // low-conf -> human
+    { residual_issue: 10, shipped: true, findings: [f('DECISION', null), f('FIX_NOW', 'high')] },
+    { residual_issue: 20, shipped: true, findings: [f('RESOLVED'), f('FIX_NOW', 'high')] }, // no human
+  ];
+  assert.deepEqual(parkCandidates(results), [10, 30]);
+});
+
+test('parkCandidates: excludes unshipped residuals (they defer, not park)', () => {
+  const results = [
+    { residual_issue: 5, shipped: false, findings: [f('DECISION', null)] },
+    { residual_issue: 6, shipped: true, findings: [f('DECISION', null)] },
+  ];
+  assert.deepEqual(parkCandidates(results), [6]);
+});
+
+test('parkCandidates: tolerates null/empty', () => {
+  assert.deepEqual(parkCandidates([]), []);
+  assert.deepEqual(parkCandidates([null]), []);
+  assert.deepEqual(parkCandidates(undefined), []);
 });
 
 test('deferredResiduals: only unshipped sub-issues, ascending', () => {
