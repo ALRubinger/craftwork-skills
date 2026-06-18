@@ -66,23 +66,125 @@ The autonomous skills (`cw-ship`, `cw-orchestrate`, `cw-sweep`) drive real merge
 
 ## Scheduling the autonomous loops
 
-A loop is just a slash command. To run one unattended, have any agent runtime execute it **non-interactively, on a timer**. Nothing here is Claude-specific beyond the example invocation; any runtime that can run a skill headlessly plus any scheduler gives you the loop.
+A loop is just a slash command. To run one unattended, have any agent runtime execute it **non-interactively, on a timer**. Nothing below is Claude-specific beyond the `claude -p` invocation; any runtime that can run a skill headlessly plus any scheduler gives you the loop. `cw-ship` is the one that wants a schedule (it is the continuous backlog drainer); `cw-orchestrate` and `cw-sweep` run on demand, so you do not need to schedule them.
 
-**1. Local cron / launchd / systemd → headless agent.** Point your OS scheduler at a one-line wrapper that runs the skill headlessly. With Claude Code that is:
+Replace `<owner>/<repo>` and the checkout path with yours throughout.
+
+### Step 1 — the wrapper (macOS / Linux)
+
+Save this to `~/bin/cw-ship.sh` and `chmod +x ~/bin/cw-ship.sh`. It puts the toolchain on PATH (schedulers run with a minimal environment), refreshes a local checkout for git context, and runs the loop headlessly.
 
 ```sh
+#!/usr/bin/env bash
+set -euo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"   # gh, git, node
+[ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh"                   # if node is via nvm
+
+REPO="<owner>/<repo>"
+REPO_DIR="$HOME/path/to/<repo>"
+
+cd "$REPO_DIR"
+git fetch origin main -q && git checkout main -q && git pull -q --ff-only
+claude -p "/cw-ship $REPO"
+```
+
+A hardened version — with a retry loop for transient backoff and an optional `cw-orchestrate` follow-up step — is in [`skills/cw-ship/references/scheduling.md`](skills/cw-ship/references/scheduling.md). For a non-Claude runtime, swap `claude -p "/cw-ship $REPO"` for that agent's non-interactive command.
+
+### Step 2 — register it with your OS scheduler
+
+**macOS — launchd.** Save `~/Library/LaunchAgents/local.cw-ship.plist` (runs 08:13 / 14:13 / 20:13 local):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>local.cw-ship</string>
+  <key>ProgramArguments</key>
+    <array><string>/bin/bash</string><string>-lc</string><string>$HOME/bin/cw-ship.sh</string></array>
+  <key>StartCalendarInterval</key><array>
+    <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>13</integer></dict>
+    <dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>13</integer></dict>
+    <dict><key>Hour</key><integer>20</integer><key>Minute</key><integer>13</integer></dict>
+  </array>
+  <key>StandardOutPath</key><string>/tmp/cw-ship.out</string>
+  <key>StandardErrorPath</key><string>/tmp/cw-ship.err</string>
+</dict></plist>
+```
+
+```sh
+launchctl load ~/Library/LaunchAgents/local.cw-ship.plist   # activate the schedule
+launchctl start local.cw-ship                                # run once now (test); logs: tail -f /tmp/cw-ship.out
+launchctl unload ~/Library/LaunchAgents/local.cw-ship.plist  # pause
+```
+
+**Linux — cron.** Add three daily entries with `crontab -e`:
+
+```cron
+13 8,14,20 * * * $HOME/bin/cw-ship.sh >> $HOME/.local/state/cw-ship.log 2>&1
+```
+
+```sh
+crontab -l            # verify it is installed
+$HOME/bin/cw-ship.sh  # run once now (test)
+```
+
+**Linux — systemd timer.** Create `~/.config/systemd/user/cw-ship.service`:
+
+```ini
+[Unit]
+Description=cw-ship feedback loop
+[Service]
+Type=oneshot
+ExecStart=%h/bin/cw-ship.sh
+```
+
+and `~/.config/systemd/user/cw-ship.timer`:
+
+```ini
+[Unit]
+Description=Run cw-ship three times a day
+[Timer]
+OnCalendar=*-*-* 08,14,20:13:00
+Persistent=true
+[Install]
+WantedBy=timers.target
+```
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now cw-ship.timer   # activate
+systemctl --user start cw-ship.service         # run once now (test)
+journalctl --user -u cw-ship.service -f        # logs
+```
+
+**Windows — Task Scheduler.** Save a wrapper to `%USERPROFILE%\bin\cw-ship.cmd` (ensure `git`, `node`, and `claude` are on the system PATH):
+
+```bat
+@echo off
+cd /d %USERPROFILE%\path\to\<repo>
+git fetch origin main -q && git checkout main -q && git pull -q --ff-only
 claude -p "/cw-ship <owner>/<repo>"
 ```
 
-Fire it from cron (`13 9 * * *`), a macOS LaunchAgent, or a systemd timer. The skill holds its own run lock and is idempotent, so overlapping or retried runs are safe. A complete worked example — wrapper, plist, retry loop, permission notes — is in [`skills/cw-ship/references/scheduling.md`](skills/cw-ship/references/scheduling.md) (written for the author's macOS setup; adapt the paths and repo). For another agent, substitute its non-interactive invocation for `claude -p`.
+Register one task per run time (`schtasks /sc daily` fires once a day):
 
-**2. GitHub Actions cron (repo-native, no laptop required).** A scheduled workflow that runs the agent in CI — best for teams, or when you do not want the loop tied to one machine. Use [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action) (or your agent's equivalent action) on a `schedule:` trigger. The runner needs a token with merge rights, and the bot identity must be allowed to bypass required review.
+```bat
+schtasks /create /tn "cw-ship-am"  /tr "%USERPROFILE%\bin\cw-ship.cmd" /sc daily /st 08:13
+schtasks /create /tn "cw-ship-mid" /tr "%USERPROFILE%\bin\cw-ship.cmd" /sc daily /st 14:13
+schtasks /create /tn "cw-ship-pm"  /tr "%USERPROFILE%\bin\cw-ship.cmd" /sc daily /st 20:13
+schtasks /run    /tn "cw-ship-am"     :: run once now (test)
+schtasks /delete /tn "cw-ship-am" /f  :: remove
+```
 
-**3. Managed cloud routine.** If your platform offers scheduled agent runs (e.g. Claude Code's `/schedule`), point one at the loop command. These usually enforce a minimum interval (around an hour) and are billed.
+### Without a local machine
 
-**Safety, however you schedule it:**
+**GitHub Actions cron (repo-native).** A scheduled workflow runs the agent in CI — best for teams, or when you do not want the loop tied to one machine. Use [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action) (or your agent's equivalent action) on a `schedule:` trigger. The runner needs a token with merge rights, and the bot identity must be allowed to bypass required review.
 
-- These skills perform real merges. **Scope the agent's auth to the target repo** and start with a dry run (`cw-ship` accepts `build: false` to plan and park without opening PRs).
+**Managed cloud routine.** If your platform offers scheduled agent runs (e.g. Claude Code's `/schedule`), point one at `/cw-ship <owner>/<repo>`. These usually enforce a minimum interval (around an hour) and are billed.
+
+### Safety, however you schedule it
+
+- These skills perform real merges. **Scope the agent's auth to the target repo** and start with a dry run — `cw-ship` accepts `build: false` to plan and park without opening PRs. Do one manual `claude -p "/cw-ship <owner>/<repo>"` and watch it before you activate any schedule.
 - In a headless run, **do not override the permission mode in a way that re-introduces interactive prompts** — a prompt with no human to answer it hangs the loop. Rely on a pre-approved allowlist instead.
 - The everyday loop pages you (`cw-ship` fires a notification when it parks a decision), so an unattended schedule still keeps you in the loop exactly when a human judgment is needed — and only then.
 
