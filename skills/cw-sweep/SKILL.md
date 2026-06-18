@@ -109,7 +109,7 @@ Then summarize what was cleared: how many residuals closed (`triaged` where `clo
 
 ### Step 4: Reconcile the umbrella (mandatory when scoped to one)
 
-If the run was scoped to an umbrella (`umbrella` arg set), or every triaged residual traces back to a single umbrella, **update that umbrella issue before declaring done** — a residual run that closes issues but leaves the umbrella stale is not finished. The umbrella body is hand-curated prose, so reconcile it with judgment rather than a blind rewrite:
+If the run was scoped to an umbrella (`umbrella` arg set), or every triaged residual traces back to a single umbrella, **update that umbrella issue before declaring done** — a residual run that closes issues but leaves the umbrella stale is not finished. This is the residual-specific application of the [issue-reconciliation contract](../cw-orchestrate/references/issue-reconciliation.md) (shared with cw-ship and cw-orchestrate). The umbrella body is hand-curated prose, so reconcile it with judgment rather than a blind rewrite:
 
 1. **Check off and rewrite stale lines.** For every residual or sub-issue this run closed (including via an autofix PR), flip its checkbox to `[x]` and update any status/prose line that still calls it "open" or "awaiting the residual-triage skill." Fetch the body with `gh issue view <umbrella> --json body -q .body > body.md`, edit surgically, and push with `gh issue edit <umbrella> --body-file body.md`. Preserve everything you did not change verbatim.
 2. **Record new deferrals.** If the run split work out into a new follow-up issue (e.g. a deferred test), add it to the umbrella's deferred list so it is tracked.
