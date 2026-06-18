@@ -170,6 +170,8 @@ The invariant: when the run ends, the umbrella, its sub-issues, and its parent o
 
 ### Step 8: Clean up the run's worktrees and local branches
 
+This step *heals* the primary checkout after the fact; the standing invariant that keeps it healable — all work in worktrees, the primary checkout's default branch a pure fast-forward mirror of `origin` — and the `pre-commit` hook that enforces it are in [references/worktree-discipline.md](./references/worktree-discipline.md).
+
 After the report is surfaced, the main session removes the debris the background Workflow leaves behind. The Workflow's work subagents run with `isolation: 'worktree'`, so each leaves a `wf_<workflowRunId>-NN` worktree **and** a local feature branch. The serialized merge step's `gh pr merge --delete-branch` deletes the **remote** branch but leaves the local worktree and branch; and because `gh` runs from inside a worktree, its post-merge local cleanup often fails noisily and can leave the default-branch checkout switched onto a feature branch with local `<defaultBranch>` sitting behind the squash commits. Heal all of this automatically, **scoped strictly to this run's artifacts**:
 
 1. **Capture the `workflowRunId`** the Workflow tool returned at launch (e.g. `wf_f589ef2f-d48`). Only worktrees whose path matches `.claude/worktrees/<workflowRunId>-*` are in scope — never other runs' `wf_*` worktrees, never named/human worktrees, never the session's own worktree.
