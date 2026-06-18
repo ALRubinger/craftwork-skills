@@ -16,6 +16,7 @@
 //   'park'     — open questions remain, OR umbrella-sized but not yet cleared
 export function dispositionFor(plan, hasGo) {
   if (!plan || !plan.route) return 'park';
+  if (plan.route === 'yielded') return 'skip'; // lost the claim race — another run owns this issue
   if (plan.route === 'needs-input') return 'park';
   if (plan.route === 'umbrella') return hasGo ? 'umbrella' : 'park';
   // route === 'fix'
@@ -42,7 +43,8 @@ export function actionQueues(planned) {
     const d = dispositionFor(p.plan, p.hasGo);
     if (d === 'build') build.push(p);
     else if (d === 'umbrella') umbrella.push(p);
-    else park.push(p);
+    else if (d === 'park') park.push(p);
+    // d === 'skip' (yielded): another run owns the issue — do nothing with it.
   }
   return { build, umbrella, park };
 }
