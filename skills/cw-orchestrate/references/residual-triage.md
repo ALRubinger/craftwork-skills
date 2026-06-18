@@ -97,6 +97,8 @@ A residual is marked `shipped:false` and deferred **only** when the feature is g
 
 **Dispatch:** `agent(autofixPrompt(node), { isolation: 'worktree', schema: BUILD_SCHEMA, phase: 'Autofix' })`, one per `autofixCandidates` entry, sequential. The subagent receives **only** the high-confidence fixes (`highConfidenceFixes(result)`) and is instructed to stay strictly in scope — a fix that turns out larger or ambiguous than described is skipped and noted, never expanded.
 
+**Freshness pre-check (first, before branching).** The triage snapshot can go stale between classification and implementation — a parallel PR or another session may close the residual or land an equivalent fix on the default branch. So the subagent re-verifies before writing code: (a) the residual is still **open** (else stop, `ready_to_merge:false`, cause "already closed since triage"), and (b) each listed fix is **not already present** at fresh default-branch HEAD (drop those that are; if all are, stop with cause "fixes already landed"). This is what keeps the out-of-band `cw-sweep` backlog drain — where snapshots are oldest and parallel work likeliest — from burning a PR + CI cycle re-implementing work that already merged. The in-run path triages right after each node merges, so its window is smaller, but the same guard applies.
+
 **Closing keyword** is set from the disposition: `close-via-autofix` → `Closes #<residual>`; otherwise `Relates to #<residual>` (unresolved escalations remain).
 
 **Output schema:** the same `BUILD_SCHEMA` the work role returns, so the autofix PR flows through the identical serialized merge step (`mergePrompt` / `MERGE_SCHEMA`, see `merge-safety.md`). `issue` carries the residual number for logging.
