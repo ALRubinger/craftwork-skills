@@ -33,7 +33,7 @@ On a schedule (the default — see [references/scheduling.md](./references/sched
 - `gh` (authenticated — `gh auth status`) and `git`.
 - The **Workflow** tool. The skill launches `workflow.js` via `scriptPath`.
 - Standing PR-shepherd authorization for this repo family (squash-merge with `--admin`, `--force-with-lease` rebase) — the build path merges unsupervised.
-- A run lock so scheduled runs don't overlap (Step 1).
+- Nothing to lock: cw-ship runs are safe to overlap on the same repo. Concurrency is serialized **per issue** by an atomic claim, not by a repo-wide lock (Step 1).
 
 ## Workflow
 
@@ -41,21 +41,16 @@ On a schedule (the default — see [references/scheduling.md](./references/sched
 
 Find `AGENTS.md` / `CLAUDE.md` in the target repo and note its build/test/merge conventions (spec-is-source-of-truth + regen, conventional commits, squash + `--admin`, coverage bar, docs voice, no backwards-compat) and the default branch. The build subagents must honor them; they're passed the repo and re-read these themselves, but you confirm the repo and default branch here.
 
-### Step 1: Hold the run lock
+### Step 1: Concurrency — there is no run lock
 
-This skill is built to run unattended and overlapping runs could double-process an issue. Take a coarse run lock before launching (the per-issue `feedback:triaging` label is a second, finer guard the Workflow manages):
+**Launch directly; do not take any lock.** N cw-ship runs may execute on the same repo at once. The serialization unit is the **issue**, not the repo: a run builds an issue only if it owns that issue's atomic claim. This replaces the old per-repo lockfile, which was unsound here — every Bash call in this harness is a fresh ephemeral shell, so a PID written into a lock is dead almost immediately and a liveness check can't tell a live run from a finished one (it led to one run "reclaiming" another's lock as stale and double-processing). Nothing about the new model depends on a process being alive.
 
-```sh
-LOCK="$HOME/.cache/cw-ship/<owner>-<repo>.lock"
-mkdir -p "$(dirname "$LOCK")"
-# acquire atomically; if held by a live run, exit cleanly
-if ! ( set -o noclobber; echo "$$ $(date -u +%FT%TZ)" > "$LOCK" ) 2>/dev/null; then
-  echo "another cw-ship run holds the lock; exiting"; exit 0
-fi
-trap 'rm -f "$LOCK"' EXIT
-```
+The Workflow handles the claim per issue (Plan stage):
 
-A stale lock older than ~1h with no live owner can be removed by hand; the next run proceeds.
+- **Claim + verify.** A run claims an issue by posting an atomic claim comment (`<!-- cw-ship/claim -->`, identified by GitHub's server-assigned comment id + `created_at`), adds `feedback:triaging`, then re-reads all claim comments and confirms it is the owner — **earliest `created_at` among non-stale claims, ties broken by lowest comment id**. The loser of a race yields (deletes its own claim, leaves the label for the owner) and never builds the issue.
+- **Discovery excludes live claims; reclaims crashed ones.** Discovery surfaces `feedback:new` / `feedback:go`, plus a `feedback:triaging` issue **only** if its claim has crashed: older than **`CLAIM_TIMEOUT` (2h)** with no open PR and no recent issue update. A live in-flight claim is never disturbed; a genuinely crashed run's issue is recoverable by age, not by a PID.
+
+The full claim/recovery contract is the load-bearing part of this skill — see [references/state-machine.md](./references/state-machine.md). The pure resolution logic is in `claim.mjs` (tested in `tests/claim.test.mjs`); `planPrompt` in `workflow.js` implements it via gh.
 
 ### Step 2: Launch the Workflow
 
@@ -126,7 +121,7 @@ For umbrellas this run filed (Step 3), reconciling their sub-issues is `cw-orche
 
 This step *heals* the primary checkout; the invariant that keeps it healable — all work in worktrees, never a commit on the primary checkout — and the enforcing `pre-commit` hook are in [cw-orchestrate's worktree-discipline.md](../cw-orchestrate/references/worktree-discipline.md).
 
-After the report is surfaced (and before releasing the lock), remove the debris the background Workflow leaves behind. The `build` subagents run with `isolation: 'worktree'`, so each leaves a `wf_<workflowRunId>-NN` worktree **and** a local feature branch. The serialized merge step's `gh pr merge --delete-branch` deletes the **remote** branch but leaves the local worktree and branch; and because `gh` runs from inside a worktree, its post-merge local cleanup often fails noisily and can leave the default-branch checkout switched onto a feature branch with local `<defaultBranch>` sitting behind the squash commits — that is what makes a later `git pull` report divergent branches. Heal all of this automatically, **scoped strictly to this run's artifacts**:
+After the report is surfaced, remove the debris the background Workflow leaves behind. The `build` subagents run with `isolation: 'worktree'`, so each leaves a `wf_<workflowRunId>-NN` worktree **and** a local feature branch. The serialized merge step's `gh pr merge --delete-branch` deletes the **remote** branch but leaves the local worktree and branch; and because `gh` runs from inside a worktree, its post-merge local cleanup often fails noisily and can leave the default-branch checkout switched onto a feature branch with local `<defaultBranch>` sitting behind the squash commits — that is what makes a later `git pull` report divergent branches. Heal all of this automatically, **scoped strictly to this run's artifacts**:
 
 1. **Capture the `workflowRunId`** the Workflow tool returned at launch in Step 2 (e.g. `wf_f589ef2f-d48`). Only worktrees whose path matches `.claude/worktrees/<workflowRunId>-*` are in scope — never other runs' `wf_*` worktrees, never named/human worktrees, never the session's own worktree. (Concurrent `cw-ship`/`cw-sweep`/`cw-orchestrate` runs each scope to their own `workflowRunId`, so they never touch each other's worktrees.)
 2. **Remove vs. keep is decided by merge state, never by guesswork.** For each in-scope worktree, read its branch (`git worktree list`), then:
@@ -135,11 +130,7 @@ After the report is surfaced (and before releasing the lock), remove the debris 
 3. **Heal the default branch.** `git fetch origin <defaultBranch>`. If the primary checkout (or any surviving worktree) is parked on a now-deleted feature branch, switch it back to `<defaultBranch>` (untracked files are preserved across the switch). Then advance local `<defaultBranch>` to `origin/<defaultBranch>`: `git branch -f <defaultBranch> origin/<defaultBranch>` when nothing has it checked out, else `git -C <checkout> merge --ff-only origin/<defaultBranch>`. A local-only commit on `<defaultBranch>` here is the **un-squashed twin** of a commit already on `origin/<defaultBranch>` (a squash-merge artifact), so advancing loses no work — confirm with `git log origin/<defaultBranch>..<defaultBranch>` showing only such twins before forcing.
 4. `git worktree prune`, then report what was removed and what was deliberately kept.
 
-The merge-state gate is what makes this safe to run unattended: a worktree is removed only when its work is provably on `<defaultBranch>` and the tree is clean. Never remove a worktree with uncommitted changes or an unmerged branch.
-
-### Step 7: Release the lock
-
-The `trap` in Step 1 removes the lock on exit. If you launched the Workflow and returned, the lock should be released once the run is fully reported and the cleanup in Step 6 is done (the background Workflow does its own gh work; the lock guards against a *second skill invocation* overlapping, which the label guard also covers).
+The merge-state gate is what makes this safe to run unattended: a worktree is removed only when its work is provably on `<defaultBranch>` and the tree is clean. Never remove a worktree with uncommitted changes or an unmerged branch. Cleanup is **run-scoped** (only this run's `workflowRunId` worktrees) precisely so concurrent runs never touch each other's artifacts — that invariant is what lets cw-ship runs overlap with no lock.
 
 ## Key Notes
 
@@ -148,6 +139,6 @@ The `trap` in Step 1 removes the lock on exit. If you launched the Workflow and 
 - **Build conservatism mirrors cw-sweep.** A subagent that hits an unsettled fork mid-build reports `needs-input: <question>` rather than guessing; that issue parks back to you instead of merging a wrong call. Auto-merging a wrong change is worse than parking.
 - **GitHub is the source of truth (Step 5).** A merged change isn't done until GitHub reflects it: the feedback issue closed (the `Closes` keyword usually does this, but a missing keyword is closed as a safety net), its description updated if the change diverged from the captured intent, and any parent/tracker/cross-reference reconciled. Standalone feedback issues make this a near no-op; issues tracked by a parent or referencing others get the same close/tick/update as cw-orchestrate's Step 7. The shared contract is [issue-reconciliation.md](../cw-orchestrate/references/issue-reconciliation.md).
 - **Self-cleaning (Step 6).** All implementation happens in `isolation: 'worktree'` build subagents, never on the default checkout. After the run the main session removes its own `wf_<runId>-*` worktrees and local branches and heals the default-branch checkout — scoped to this run's `workflowRunId` and gated on merge state — so the working copy is left clean on `<defaultBranch>` matching `origin`. This is what keeps many concurrent runs from leaving the shared checkout parked on a feature branch with a divergent local `<defaultBranch>`.
-- **Idempotent + locked.** Every run re-discovers from live labels, so a missed/partial/crashed run self-heals next tick. The run lock + `feedback:triaging` label prevent double-processing.
+- **Concurrency is per-issue, not per-repo (Step 1).** There is no run lock — N runs may overlap on the same repo. Each issue is serialized by an atomic claim (a `<!-- cw-ship/claim -->` comment + `feedback:triaging`), verified after acquisition (earliest non-stale claim by `created_at`, ties by lowest comment id) so a snapshot→claim race resolves to exactly one owner. No run ever steals another's claim on a liveness guess; a genuinely crashed claim (>2h, no open PR, no recent update) is reclaimable by **age**, never by PID. Every run re-discovers from live labels, so a missed/partial/crashed run self-heals next tick. Contract: [references/state-machine.md](./references/state-machine.md).
 - **Umbrella handoff uses the existing seam.** This skill files a *ready* umbrella and lets `cw-orchestrate` execute it — it does not reimplement orchestration. The operator's `feedback:go` on an umbrella-sized issue is the approval that authorizes both filing and execution.
 - **Git/PR via `gh`/`git`, not MCP** — background Workflow subagents may not have interactively-authenticated MCP servers.
