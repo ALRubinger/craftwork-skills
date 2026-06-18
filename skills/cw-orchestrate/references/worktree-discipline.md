@@ -32,9 +32,13 @@ To enforce the invariant against any agent (not just these skills), install a `p
 #!/bin/sh
 # Refuse commits in the PRIMARY working tree — all work must happen in a worktree,
 # so the default branch only ever fast-forwards from origin.
-case "$(git rev-parse --absolute-git-dir)" in
-  */worktrees/*) exit 0 ;;   # linked worktree → allowed
-esac
+# A linked worktree's git-dir differs from the common git-dir; the primary
+# checkout's two are identical. Comparing them is path-name agnostic (a repo that
+# happens to live under a dir named "worktrees" won't fool a glob).
+gitdir="$(git rev-parse --absolute-git-dir)"
+commondir="$(git rev-parse --git-common-dir)"
+case "$commondir" in /*) ;; *) commondir="$(CDPATH= cd -- "$commondir" && pwd)" ;; esac
+[ "$gitdir" != "$commondir" ] && exit 0   # linked worktree → allowed
 [ -n "$ALLOW_PRIMARY_COMMIT" ] && exit 0
 branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo DETACHED)"
 cat >&2 <<MSG
