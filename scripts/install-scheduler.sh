@@ -1,34 +1,32 @@
 #!/usr/bin/env bash
 #
-# install-scheduler.sh — put the CraftWork cw-ship loop on a schedule with one command.
+# install-scheduler.sh — put a CraftWork autonomous loop on a schedule with one command.
 #
-# Detects your OS and wires up the schedule for you: launchd on macOS, a systemd
-# user timer (or cron) on Linux. Interactive by default; prompts for the repo,
-# a local checkout path, and run times, offering sensible defaults. Re-runnable
-# and reversible.
+# Schedules cw-ship (the continuous feedback-backlog drainer, the default) or
+# cw-sweep (the out-of-band review-residual backlog drain). Detects your OS and
+# wires up the timer: launchd on macOS, a systemd user timer (or cron) on Linux.
+# Interactive by default; prompts for the repo, a local checkout path, and run
+# times, offering sensible defaults. Re-runnable and reversible. Each skill gets
+# its own wrapper, timer, and label, so the two schedules coexist.
 #
 # Usage:
-#   bash install-scheduler.sh                         # interactive
-#   bash install-scheduler.sh --repo owner/repo \
+#   bash install-scheduler.sh                                # interactive (cw-ship)
+#   bash install-scheduler.sh --skill cw-sweep               # interactive (cw-sweep)
+#   bash install-scheduler.sh --skill cw-ship --repo owner/repo \
 #        --repo-dir ~/code/repo --times 8:13,14:13,20:13 --yes
-#   bash install-scheduler.sh --dry-run               # show what it would do, touch nothing
-#   bash install-scheduler.sh --uninstall             # remove the schedule
+#   bash install-scheduler.sh --skill cw-sweep --dry-run     # show what it would do, touch nothing
+#   bash install-scheduler.sh --skill cw-sweep --uninstall   # remove that skill's schedule
 #
 set -euo pipefail
 
-WRAPPER="$HOME/bin/cw-ship.sh"
-PLIST="$HOME/Library/LaunchAgents/local.cw-ship.plist"
-SYSTEMD_DIR="$HOME/.config/systemd/user"
-UNIT="cw-ship"                       # systemd unit + cron marker base
-DEFAULT_TIMES="8:13,14:13,20:13"
-
-REPO="" ; REPO_DIR="" ; TIMES="" ; ACTION="install" ; ASSUME_YES=0 ; DRY=0
+REPO="" ; REPO_DIR="" ; TIMES="" ; SKILL="" ; ACTION="install" ; ASSUME_YES=0 ; DRY=0
 
 die() { echo "error: $*" >&2; exit 1; }
-usage() { sed -n '3,16p' "$0" | sed 's/^#\{0,1\} \{0,1\}//'; }
+usage() { sed -n '3,19p' "$0" | sed 's/^#\{0,1\} \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --skill)     SKILL="${2:-}"; shift 2 ;;
     --repo)      REPO="${2:-}"; shift 2 ;;
     --repo-dir)  REPO_DIR="${2:-}"; shift 2 ;;
     --times)     TIMES="${2:-}"; shift 2 ;;
@@ -39,6 +37,31 @@ while [ $# -gt 0 ]; do
     *) die "unknown argument: $1 (try --help)" ;;
   esac
 done
+
+# ---------- skill selection ----------
+# Each schedulable skill defines its own paths, default cadence, and the headless
+# prompt baked into the generated wrapper. cw-ship runs unattended out of the box;
+# cw-sweep is interactive-first, so its prompt pre-answers the scope/autofix
+# questions to keep a `claude -p` run from blocking (and thus no-opping).
+SKILL="${SKILL:-cw-ship}"
+case "$SKILL" in
+  cw-ship)
+    DEFAULT_TIMES="8:13,14:13,20:13"
+    SKILL_DESC="feedback backlog loop"
+    PROMPT_LINE='PROMPT="/cw-ship $REPO"'
+    WRAPPER_TRAILER=$'\n# Optional: also execute any umbrellas the loop just filed (idempotent). Uncomment to enable.\n# claude -p "/cw-orchestrate $REPO"' ;;
+  cw-sweep)
+    DEFAULT_TIMES="12:30,21:30"
+    SKILL_DESC="review-residual backlog drain"
+    PROMPT_LINE='PROMPT="/cw-sweep $REPO — triage the whole open review-residual backlog with autofix enabled. Run fully non-interactively: do not ask for confirmation; default any operator prompt to scope=whole-backlog, autofix=on."'
+    WRAPPER_TRAILER="" ;;
+  *) die "unknown --skill '$SKILL' (expected cw-ship or cw-sweep)" ;;
+esac
+
+WRAPPER="$HOME/bin/$SKILL.sh"
+PLIST="$HOME/Library/LaunchAgents/local.$SKILL.plist"
+SYSTEMD_DIR="$HOME/.config/systemd/user"
+UNIT="$SKILL"                        # systemd unit + cron marker base
 
 OS="$(uname -s)"
 
@@ -96,16 +119,16 @@ uninstall() {
         run bash -c "crontab -l 2>/dev/null | sed '/# >>> $UNIT >>>/,/# <<< $UNIT <<</d' | crontab -"
       fi ;;
   esac
-  echo "cw-ship schedule removed. (Left $WRAPPER in place; delete it manually if you no longer want it.)"
+  echo "$SKILL schedule removed. (Left $WRAPPER in place; delete it manually if you no longer want it.)"
 }
 
 [ "$ACTION" = uninstall ] && { uninstall; exit 0; }
 
 # ---------- gather inputs ----------
 DEF_DIR=""; git rev-parse --show-toplevel >/dev/null 2>&1 && DEF_DIR="$(git rev-parse --show-toplevel)"
-ask REPO     "GitHub repo the loop should triage (owner/repo)" "$(parse_remote .)"
-ask REPO_DIR "Local checkout of that repo (for git context)"   "${DEF_DIR:-$HOME/path/to/repo}"
-ask TIMES    "Run times, comma-separated HH:MM (local)"        "$DEFAULT_TIMES"
+ask REPO     "GitHub repo $SKILL should triage (owner/repo)" "$(parse_remote .)"
+ask REPO_DIR "Local checkout of that repo (for git context)" "${DEF_DIR:-$HOME/path/to/repo}"
+ask TIMES    "Run times, comma-separated HH:MM (local)"      "$DEFAULT_TIMES"
 
 [ -n "$REPO" ] || die "repo is required (owner/repo)"
 case "$REPO" in */*) : ;; *) die "repo must be 'owner/repo', got '$REPO'" ;; esac
@@ -114,7 +137,8 @@ for b in claude git gh; do command -v "$b" >/dev/null 2>&1 || echo "warning: '$b
 
 MECH="$(resolve_mechanism)"
 echo
-echo "Planned cw-ship schedule:"
+echo "Planned $SKILL schedule:"
+echo "  skill:      $SKILL ($SKILL_DESC)"
 echo "  repo:       $REPO"
 echo "  checkout:   $REPO_DIR"
 echo "  times:      $TIMES (local)"
@@ -126,7 +150,7 @@ confirm "Proceed?" || { echo "aborted."; exit 0; }
 # ---------- write the wrapper ----------
 writefile "$WRAPPER" <<EOF
 #!/usr/bin/env bash
-# Generated by craftwork-skills install-scheduler.sh — re-run it to update.
+# Generated by craftwork-skills install-scheduler.sh ($SKILL) — re-run it to update.
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:\$PATH"   # gh, git, node
 [ -s "\$HOME/.nvm/nvm.sh" ] && . "\$HOME/.nvm/nvm.sh"                 # if node is via nvm
@@ -137,17 +161,17 @@ REPO_DIR="$REPO_DIR"
 cd "\$REPO_DIR"
 git fetch origin main -q && git checkout main -q && git pull -q --ff-only || true
 
+$PROMPT_LINE
+
 # Retry loop: a headless run can no-op on a transient classifier/backoff blip.
 attempt=0
 until [ "\$attempt" -ge 4 ]; do
-  out="\$(claude -p "/cw-ship \$REPO" 2>&1)" && rc=0 || rc=\$?
+  out="\$(claude -p "\$PROMPT" 2>&1)" && rc=0 || rc=\$?
   printf '%s\n' "\$out"
   if [ "\$rc" -eq 0 ] && ! printf '%s' "\$out" | grep -qiE 'classifier (briefly )?unavailable|rate.?limit|backoff'; then break; fi
   attempt=\$((attempt + 1)); sleep \$((attempt * 30))
 done
-
-# Optional: also execute any umbrellas the loop just filed (idempotent). Uncomment to enable.
-# claude -p "/cw-orchestrate \$REPO"
+$WRAPPER_TRAILER
 EOF
 run chmod +x "$WRAPPER"
 
@@ -162,24 +186,24 @@ install_launchd() {
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>local.cw-ship</string>
+  <key>Label</key><string>local.$SKILL</string>
   <key>ProgramArguments</key>
     <array><string>/bin/bash</string><string>-lc</string><string>$WRAPPER</string></array>
   <key>StartCalendarInterval</key><array>
 $dicts  </array>
-  <key>StandardOutPath</key><string>/tmp/cw-ship.out</string>
-  <key>StandardErrorPath</key><string>/tmp/cw-ship.err</string>
+  <key>StandardOutPath</key><string>/tmp/$SKILL.out</string>
+  <key>StandardErrorPath</key><string>/tmp/$SKILL.err</string>
 </dict></plist>
 EOF
   run launchctl unload "$PLIST" 2>/dev/null || true
   run launchctl load "$PLIST"
-  TEST_CMD="launchctl start local.cw-ship   # logs: tail -f /tmp/cw-ship.out"
+  TEST_CMD="launchctl start local.$SKILL   # logs: tail -f /tmp/$SKILL.out"
 }
 
 install_systemd() {
   writefile "$SYSTEMD_DIR/$UNIT.service" <<EOF
 [Unit]
-Description=CraftWork cw-ship feedback loop
+Description=CraftWork $SKILL ($SKILL_DESC)
 [Service]
 Type=oneshot
 ExecStart=$WRAPPER
@@ -188,7 +212,7 @@ EOF
   IFS=','; for t in $TIMES; do cal+="OnCalendar=*-*-* $(pad2 "${t%%:*}"):$(pad2 "${t##*:}"):00"$'\n'; done; unset IFS
   writefile "$SYSTEMD_DIR/$UNIT.timer" <<EOF
 [Unit]
-Description=Run cw-ship on a schedule
+Description=Run $SKILL on a schedule
 [Timer]
 ${cal}Persistent=true
 [Install]
@@ -203,7 +227,7 @@ install_cron() {
   local lines="" t h m
   IFS=','; for t in $TIMES; do
     h="$((10#${t%%:*}))"; m="$((10#${t##*:}))"
-    lines+="$m $h * * * $WRAPPER >> \$HOME/.local/state/cw-ship.log 2>&1"$'\n'
+    lines+="$m $h * * * $WRAPPER >> \$HOME/.local/state/$SKILL.log 2>&1"$'\n'
   done; unset IFS
   run mkdir -p "$HOME/.local/state"
   local block="# >>> $UNIT >>>"$'\n'"$lines""# <<< $UNIT <<<"
@@ -221,8 +245,8 @@ esac
 
 # ---------- report ----------
 echo
-echo "Done — cw-ship will run at $TIMES (local), triaging $REPO."
+echo "Done — $SKILL will run at $TIMES (local), triaging $REPO."
 echo
 echo "Test it now:    $TEST_CMD"
-echo "Dry run first:  claude -p \"/cw-ship $REPO\"   (or pass build:false to plan without merging)"
-echo "Uninstall:      bash $0 --uninstall"
+echo "Dry run first:  claude -p \"/$SKILL $REPO\"   (cw-ship accepts build:false to plan without merging; cw-sweep can run with autofix off for a first pass)"
+echo "Uninstall:      bash $0 --skill $SKILL --uninstall"

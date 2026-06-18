@@ -66,7 +66,7 @@ The autonomous skills (`cw-ship`, `cw-orchestrate`, `cw-sweep`) drive real merge
 
 ## Scheduling the autonomous loops
 
-`cw-ship` is the loop you put on a schedule — it is the continuous backlog drainer. (`cw-orchestrate` and `cw-sweep` run on demand, so they do not need a timer.)
+`cw-ship` is the loop you put on a schedule — it is the continuous backlog drainer. `cw-sweep` can optionally be scheduled too (pass `--skill cw-sweep`) to drain the `review-residual` backlog out of band; `cw-orchestrate` already triages its own residuals in-band, so it does not need a timer. Each skill gets its own wrapper, timer, and label, so both schedules coexist.
 
 ### One command
 
@@ -82,15 +82,16 @@ or without cloning:
 bash <(curl -fsSL https://raw.githubusercontent.com/ALRubinger/craftwork-skills/main/scripts/install-scheduler.sh)
 ```
 
-It detects your OS (launchd on macOS, a systemd user timer or cron on Linux), prompts for the repo, a local checkout path, and run times — with defaults, auto-filled from your current checkout when it can — then writes a wrapper and activates the schedule. Handy flags:
+It detects your OS (launchd on macOS, a systemd user timer or cron on Linux), prompts for the repo, a local checkout path, and run times — with defaults, auto-filled from your current checkout when it can — then writes a wrapper and activates the schedule. Defaults to `cw-ship`. Handy flags:
 
+- `--skill cw-ship|cw-sweep` — which loop to schedule (default `cw-ship`). `cw-sweep` defaults to a lighter `12:30,21:30` cadence and bakes a non-interactive prompt into its wrapper so the headless run does not block on its scope/autofix questions.
 - `--dry-run` — print everything it would write and run, and touch nothing.
 - `--repo owner/repo --repo-dir ~/code/repo --times 8:13,14:13,20:13 --yes` — run it unattended.
-- `--uninstall` — remove the schedule.
+- `--uninstall` — remove the schedule (scoped to `--skill`; pair the two flags, e.g. `--skill cw-sweep --uninstall`).
 
 Nothing is Claude-specific beyond the `claude -p` call inside the generated wrapper; swap it for another runtime's headless command if needed.
 
-**Before you let it run unattended, do one manual run and watch it:** `claude -p "/cw-ship <owner>/<repo>"` (the loop accepts `build: false` to plan and park without opening PRs).
+**Before you let it run unattended, do one manual run and watch it:** `claude -p "/cw-ship <owner>/<repo>"` (the loop accepts `build: false` to plan and park without opening PRs). For `cw-sweep`, run `/cw-sweep <owner>/<repo>` interactively first with autofix off, to eyeball the escalation surface before letting the scheduled run apply fixes.
 
 ### Other environments
 
