@@ -111,7 +111,18 @@ If `escalations` is non-empty, fire **one** `PushNotification` so the operator k
 
 Send it only when `escalations.length > 0`; a run that merged everything and parked nothing should stay silent (a no-op notification is the kind that trains the operator to ignore them). Name the first issue or two for context, but don't dump the whole list — the inbox skill is where they'll see it all. In a headless cron run this still fires: `claude -p` has the `PushNotification` tool, and with Remote Control connected it reaches the phone.
 
-### Step 5: Clean up the run's worktrees and heal the default branch
+### Step 5: Reconcile the issues this run touched (GitHub is the source of truth)
+
+GitHub must reflect what actually shipped before the run ends — reconcile every issue it touched per the [issue-reconciliation contract](../cw-orchestrate/references/issue-reconciliation.md). The build path's only built-in reconciliation is the PR's `Closes #<issue>` keyword auto-closing the one feedback issue; a missing keyword, a parent that tracks the issue, cross-references, or a description that no longer matches what shipped are all on this step. For each entry in the report's `built` list with `merged: true`:
+
+1. **Confirm the feedback issue actually closed; close it if not.** `gh issue view <issue> --json state`. A merged PR whose body carried `Closes #<issue>` auto-closed it; if it is still `OPEN` (the keyword was omitted), close it: `gh issue close <issue> --comment "Shipped via PR #<pr>. <one line>"`. Never close an issue whose PR is `merged: false` (stalled) — leave it open with its cause.
+2. **Update the feedback issue's description if the change diverged from the captured intent.** When what shipped differs from the "What I want changed" the feedback recorded (different approach, narrower/broader scope, follow-ups split into new issues), edit the body so it reads true (contract rule 4); otherwise the closing comment is enough.
+3. **Reconcile anything that tracks or references it** (contract rules 2–3, 5). If the feedback issue appears in a parent/tracking/milestone checklist, tick its line `- [x]`, and close that parent if this was its last open child and nothing else is deferred/stalled. Reconcile any issue the feedback body or the PR `Relates to`/mentions: tick/close/annotate as its state now warrants, or post a one-line "addressed by PR #<pr>". Most dogfooding-feedback issues are standalone, so this is often a no-op — do it only when there is a real reference.
+4. **Verify.** Re-read the closed issues and any tracker you edited to confirm the edits landed.
+
+For umbrellas this run filed (Step 3), reconciling their sub-issues is `cw-orchestrate`'s Step 7 — don't duplicate it here. This step runs **before** the worktree cleanup (Step 6): GitHub truth first, local tidiness second.
+
+### Step 6: Clean up the run's worktrees and heal the default branch
 
 This step *heals* the primary checkout; the invariant that keeps it healable — all work in worktrees, never a commit on the primary checkout — and the enforcing `pre-commit` hook are in [cw-orchestrate's worktree-discipline.md](../cw-orchestrate/references/worktree-discipline.md).
 
@@ -126,16 +137,17 @@ After the report is surfaced (and before releasing the lock), remove the debris 
 
 The merge-state gate is what makes this safe to run unattended: a worktree is removed only when its work is provably on `<defaultBranch>` and the tree is clean. Never remove a worktree with uncommitted changes or an unmerged branch.
 
-### Step 6: Release the lock
+### Step 7: Release the lock
 
-The `trap` in Step 1 removes the lock on exit. If you launched the Workflow and returned, the lock should be released once the run is fully reported and the cleanup in Step 5 is done (the background Workflow does its own gh work; the lock guards against a *second skill invocation* overlapping, which the label guard also covers).
+The `trap` in Step 1 removes the lock on exit. If you launched the Workflow and returned, the lock should be released once the run is fully reported and the cleanup in Step 6 is done (the background Workflow does its own gh work; the lock guards against a *second skill invocation* overlapping, which the label guard also covers).
 
 ## Key Notes
 
 - **The blocking point is a design fork, nothing else.** The loop only stops for a decision your feedback didn't settle. It does not stop to let you review PRs — that's the whole point. If you find yourself wanting to review the small ones, that's a signal to start with `build: false` until you trust the routing, not to add a review gate.
 - **Clearing parks is one action: run `/cw-resolve`.** It finds every `feedback:needs-input` issue, walks you through the questions (recommended answer pre-filled), writes your answers into the body, and adds `feedback:go`. A park-time push notification tells you when there's something to clear. The loop never resumes a parked issue without `feedback:go` and never re-asks an answered question.
 - **Build conservatism mirrors cw-sweep.** A subagent that hits an unsettled fork mid-build reports `needs-input: <question>` rather than guessing; that issue parks back to you instead of merging a wrong call. Auto-merging a wrong change is worse than parking.
-- **Self-cleaning (Step 5).** All implementation happens in `isolation: 'worktree'` build subagents, never on the default checkout. After the run the main session removes its own `wf_<runId>-*` worktrees and local branches and heals the default-branch checkout — scoped to this run's `workflowRunId` and gated on merge state — so the working copy is left clean on `<defaultBranch>` matching `origin`. This is what keeps many concurrent runs from leaving the shared checkout parked on a feature branch with a divergent local `<defaultBranch>`.
+- **GitHub is the source of truth (Step 5).** A merged change isn't done until GitHub reflects it: the feedback issue closed (the `Closes` keyword usually does this, but a missing keyword is closed as a safety net), its description updated if the change diverged from the captured intent, and any parent/tracker/cross-reference reconciled. Standalone feedback issues make this a near no-op; issues tracked by a parent or referencing others get the same close/tick/update as cw-orchestrate's Step 7. The shared contract is [issue-reconciliation.md](../cw-orchestrate/references/issue-reconciliation.md).
+- **Self-cleaning (Step 6).** All implementation happens in `isolation: 'worktree'` build subagents, never on the default checkout. After the run the main session removes its own `wf_<runId>-*` worktrees and local branches and heals the default-branch checkout — scoped to this run's `workflowRunId` and gated on merge state — so the working copy is left clean on `<defaultBranch>` matching `origin`. This is what keeps many concurrent runs from leaving the shared checkout parked on a feature branch with a divergent local `<defaultBranch>`.
 - **Idempotent + locked.** Every run re-discovers from live labels, so a missed/partial/crashed run self-heals next tick. The run lock + `feedback:triaging` label prevent double-processing.
 - **Umbrella handoff uses the existing seam.** This skill files a *ready* umbrella and lets `cw-orchestrate` execute it — it does not reimplement orchestration. The operator's `feedback:go` on an umbrella-sized issue is the approval that authorizes both filing and execution.
 - **Git/PR via `gh`/`git`, not MCP** — background Workflow subagents may not have interactively-authenticated MCP servers.
