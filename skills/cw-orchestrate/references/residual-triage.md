@@ -67,7 +67,10 @@ A residual is marked `shipped:false` and deferred **only** when the feature is g
           "verdict":    { "type": "string", "enum": ["RESOLVED", "FIX_NOW", "DECISION", "MOOT"] },
           "confidence": { "type": "string", "enum": ["high", "low"] },
           "rationale":  { "type": "string" },
-          "fix_hint":   { "type": ["string", "null"] }
+          "fix_hint":   { "type": ["string", "null"] },
+          "decision_question":  { "type": ["string", "null"] },
+          "recommended_answer": { "type": ["string", "null"] },
+          "alt_options":        { "type": "array", "items": { "type": "string" } }
         }
       }
     }
@@ -85,7 +88,7 @@ A residual is marked `shipped:false` and deferred **only** when the feature is g
 - **`close-via-autofix`** — only `RESOLVED`/`MOOT` + high-confidence `FIX_NOW` remain. The autofix PR addresses the fixes and carries `Closes #<residual>`.
 - **`keep-open`** — at least one `DECISION` or low-confidence `FIX_NOW` remains. A human (or the standalone skill's autofix on a re-run) must finish it; an autofix PR here only `Relates to` the residual.
 
-`autofixCandidates(results)` → residual numbers with ≥1 high-confidence `FIX_NOW` (the autofix queue). `escalations(results)` → every `DECISION` plus every low-confidence `FIX_NOW` (what reaches the human). `deferredResiduals(results)` → residuals whose sub-issue had not shipped.
+`autofixCandidates(results)` → residual numbers with ≥1 high-confidence `FIX_NOW` (the autofix queue). `escalations(results)` → every `DECISION` plus every low-confidence `FIX_NOW` **on shipped residuals** (what reaches the human), each carrying its `decision_question` / `recommended_answer` / `alt_options` so it can be asked or parked verbatim. `parkCandidates(results)` → shipped residual numbers carrying ≥1 such judgment call (the park queue, the headless analog of `autofixCandidates`). `deferredResiduals(results)` → residuals whose sub-issue had not shipped (excluded from escalations — a deferral is not a decision).
 
 ---
 
@@ -105,6 +108,18 @@ A residual is marked `shipped:false` and deferred **only** when the feature is g
 
 ---
 
+## The decision park/resolve/go loop (cw-sweep)
+
+The standalone `cw-sweep` skill routes escalations to the operator through the same label state machine the feedback pipeline uses (`cw-ship`'s `state-machine.md`), so judgment calls do not evaporate into an unread headless log:
+
+- **Park.** After triage + autofix, each `parkCandidates` residual gets a `## Decision needed` block written into its body (one entry per judgment call: the `decision_question`, the `recommended_answer`, the `alt_options`) and the `review-residual:needs-input` label. Unshipped residuals defer instead of parking.
+- **Resolve.** The operator answers — inline during an interactive `cw-sweep` run (it asks each decision via `AskUserQuestion`, recommendation first), or later via `/cw-resolve`, which drains `review-residual:needs-input` the same way it drains `feedback:needs-input`. An `**Answer:**` line goes under each decision and the label flips to `review-residual:go` (or the residual is closed if the answer is "accept / no change").
+- **Go / consume.** Discovery classifies each residual's `human_state` from its labels: `needs-input` residuals are **skipped** (still awaiting the operator), `go` residuals are triaged in **consume mode** — the subagent reads the operator's answers and re-classifies (accept → `RESOLVED`; "do X" → high-confidence `FIX_NOW`), so the normal autofix/close machinery applies the decision.
+
+The same `decision_question` / `recommended_answer` / `alt_options` fields feed both the inline `AskUserQuestion` and the parked block, so the recommendation is authored once. The in-run cw-orchestrate path surfaces escalations in the umbrella report rather than parking each one.
+
+---
+
 ## Report fields
 
 The Workflow report gains:
@@ -113,9 +128,11 @@ The Workflow report gains:
 {
   "triaged":  [{ "residual_issue": 1000, "sub_issue": 986, "shipped": true, "closed": true, "disposition": "close-now" }],
   "autofixed": [{ "residual_issue": 992, "pr": "https://.../pull/NNN", "merged": true, "cause": null }],
-  "escalations": [{ "residual_issue": 1010, "sub_issue": 984, "title": "...", "verdict": "DECISION", "confidence": null, "rationale": "..." }],
-  "deferred_residuals": [1010]
+  "parked": [1010],
+  "escalations": [{ "residual_issue": 1010, "sub_issue": 984, "title": "...", "verdict": "DECISION", "confidence": null, "rationale": "...", "decision_question": "...", "recommended_answer": "...", "alt_options": ["..."] }],
+  "awaiting_input": [1004],
+  "deferred_residuals": [1011]
 }
 ```
 
-`escalations` is the only thing that needs a human after a run: genuine judgment calls and fixes the classifier wasn't confident enough to auto-apply. `deferred_residuals` are residuals whose feature had not shipped yet (re-triage on a later run).
+`escalations` is what needs a human after a run: genuine judgment calls and low-confidence fixes, each parked to its residual (`parked`) for the operator to answer inline or via `/cw-resolve`. `awaiting_input` are residuals parked in a prior run still waiting on the operator (skipped this run). `deferred_residuals` are residuals whose feature had not shipped yet (re-triage on a later run).

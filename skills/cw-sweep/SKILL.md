@@ -31,6 +31,7 @@ When the user wants to triage, clear, or act on `review-residual` issues — e.g
 
 - `gh` (authenticated — `gh auth status`) and `git`.
 - The **Workflow** tool. The skill launches `workflow.js` via `scriptPath`.
+- The **AskUserQuestion** tool — used to ask the operator each decision when an interactive run surfaces escalations (load its schema via `ToolSearch` `select:AskUserQuestion` if needed).
 - Standing PR-shepherd authorization for this repo family (squash-merge with `--admin`, `--force-with-lease` rebase) — only needed when autofix is enabled.
 
 ## Workflow
@@ -69,9 +70,10 @@ Invoke the **Workflow** tool with `scriptPath` pointing at this skill's `workflo
 
 The Workflow runs headless in the background; you are notified on completion. Do not poll. It performs, in order:
 
-1. **Discover** — list in-scope open `review-residual` issues; map each to its tracked sub-issue (from the `Relates to #<n>` line).
-2. **Triage** — one subagent per residual, in parallel: re-judge each finding against the shipped diff + current files, post a triage comment, and close the residual if nothing actionable remains. A residual whose sub-issue hasn't shipped is left open and marked deferred.
+1. **Discover** — list in-scope open `review-residual` issues; map each to its tracked sub-issue (from the `Relates to #<n>` line) and read its labels to classify a `human_state`: `fresh`, `needs-input` (parked, awaiting the operator — skipped this run), or `go` (operator answered — triaged in consume mode).
+2. **Triage** — one subagent per `fresh`/`go` residual, in parallel: re-judge each finding against the shipped diff + current files, post a triage comment, and close the residual if nothing actionable remains. A residual whose sub-issue hasn't shipped is left open and marked deferred. For `go` residuals it runs in **consume mode**: it reads the operator's `**Answer:**` lines under the `## Decision needed` block and re-classifies accordingly (accept → resolved; "do X" → a high-confidence fix).
 3. **Autofix** (if enabled) — over a now-quiescent default branch, each residual with a high-confidence `FIX_NOW` finding gets one PR (implementing only those fixes) serial-merged through the standard merge-safety contract. The PR `Closes` the residual when its fixes resolve everything actionable, else `Relates to` it.
+4. **Park** — each shipped residual with a remaining judgment call (`DECISION` or low-confidence `FIX_NOW`) gets a `## Decision needed` block written into its body — the question, your recommended answer, and the alternatives — and the `review-residual:needs-input` label. This is the durable record the operator drains (see Step 3 below and `/cw-resolve`).
 
 ### Step 3: Surface the report
 
@@ -82,17 +84,28 @@ The Workflow returns:
   "repo": "<owner>/<repo>",
   "triaged": [{ "residual_issue": 1000, "sub_issue": 986, "shipped": true, "closed": true, "disposition": "close-now" }],
   "autofixed": [{ "residual_issue": 992, "pr": "https://github.com/.../pull/NNN", "merged": true, "cause": null }],
-  "escalations": [{ "residual_issue": 1010, "sub_issue": 984, "title": "...", "verdict": "DECISION", "confidence": null, "rationale": "..." }],
-  "deferred_residuals": [1010]
+  "parked": [1010],
+  "escalations": [{ "residual_issue": 1010, "sub_issue": 984, "title": "...", "verdict": "DECISION", "confidence": null, "rationale": "...", "decision_question": "Should the banner repeat each run?", "recommended_answer": "Show once per session", "alt_options": ["Always show", "Never show"] }],
+  "awaiting_input": [1004],
+  "deferred_residuals": [1011]
 }
 ```
 
-Render it for the operator with the two action items first:
+**If you are in an interactive session and `escalations` is non-empty, ask the decisions immediately — do not dump them as prose.** This is the same recommendation-first flow as `/cw-resolve` (the Workflow already parked them durably, so this just drains them now):
 
-- **`escalations`** — the only thing that needs a decision: genuine judgment calls and fixes the classifier flagged low-confidence. List each with its residual link, the finding, and the rationale so the operator can act or hand it back.
+1. For each escalation, in `residual_issue` order, restate the residual in one line for context (e.g. "_#1010 (feature #984): is the banner meant to repeat each run?_").
+2. Ask via `AskUserQuestion`, one decision per turn: the `decision_question` as the prompt, `recommended_answer` as the first option marked "(Recommended)", then `alt_options`. Always include a **skip** path — if the operator isn't ready, leave the residual `review-residual:needs-input` and move on.
+3. Write the answer back into the residual body (the `## Decision needed` block) as an `**Answer:** <decision>` line, then advance the label: an accept/no-change answer → close the residual; a "do X" answer → `--add-label review-residual:go --remove-label review-residual:needs-input` so the next sweep applies it. Use `gh issue view … --json body -q .body > body.md` → edit → `gh issue edit … --body-file body.md` (never hand-escape). After clearing a batch, offer to re-run `/cw-sweep` on the `:go` set to apply the answered fixes now.
+
+In a **headless/scheduled run** (you were told to run non-interactively) do **not** answer decisions yourself — the Park step already recorded them as `review-residual:needs-input` for the operator to drain later via `/cw-resolve`. Just report.
+
+Then surface the rest for the operator:
+
+- **`escalations`** — the decisions (now asked inline if interactive, else parked): each with its residual link, the question, and the recommended answer.
+- **`awaiting_input`** — residuals parked in a prior run still waiting on the operator; nothing this run touched. Point the operator at `/cw-resolve` to drain them.
 - **`deferred_residuals`** — residuals whose feature hasn't shipped; nothing to do now, re-run after it merges.
 
-Then summarize what was cleared: how many residuals closed (`triaged` where `closed: true`) and how many fixes merged (`autofixed` where `merged: true`). A clean backlog run should leave behind only escalations and deferrals.
+Then summarize what was cleared: how many residuals closed (`triaged` where `closed: true`), how many fixes merged (`autofixed` where `merged: true`), and how many were parked. A clean backlog run should leave behind only decisions, awaiting-input, and deferrals.
 
 ### Step 4: Reconcile the umbrella (mandatory when scoped to one)
 
@@ -109,6 +122,7 @@ Apply the same standing rule to any **other** issue a merged autofix PR closed: 
 
 - **Triage is against shipped code, never the plan.** A residual filed against a plan is only meaningful once re-checked against the merged diff — half are moot because the implementation already fixed or diverged from the flagged thing. This is why the skill needs the sub-issue's PR to have merged; unshipped residuals defer.
 - **The confidence gate is the safety boundary.** Only `FIX_NOW` findings the triage subagent marks high-confidence (correct, safe, in-scope) are auto-applied and merged unsupervised. Anything ambiguous becomes an escalation. Auto-merging a wrong fix is worse than leaving a residual open.
+- **Decisions follow a park/resolve/go loop, mirroring the feedback pipeline.** A genuine judgment call is parked onto its residual (`review-residual:needs-input` + a `## Decision needed` block carrying the recommended answer). The operator answers — inline here in an interactive run, or later via `/cw-resolve` — which sets `review-residual:go`; the next sweep consumes the answer (close, or apply the specified fix). The same `decision_question` / `recommended_answer` / `alt_options` fields drive both the inline `AskUserQuestion` and the parked block, so the recommendation is authored once. Headless runs never answer decisions themselves — they only park.
 - **Closing is reversible; merging is not.** The skill closes resolved/moot residuals freely (a human can reopen) but is strict about what code it lands. Mismatched aggressiveness on purpose.
 - **Idempotent-ish.** Re-running over the same scope re-triages still-open residuals; already-closed ones drop out of discovery. Safe to run repeatedly as features ship and deferrals become triageable.
 - **Git/PR via `gh`/`git`, not MCP.** Background Workflow subagents may not have interactively-authenticated MCP servers.
