@@ -19,7 +19,30 @@ export const CLAIM_MARKER = '<!-- cw-ship/claim -->';
 // A claim older than this with no live work is a crashed run's claim — reclaimable.
 export const CLAIM_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
 
+// The in-flight claim label and the terminal-state labels are MUTUALLY EXCLUSIVE:
+// `feedback:triaging` means a run holds the issue; the terminal labels mean the run
+// released it (parked for input, cleared to go, or closed). An issue must never
+// carry both at once. The both-labels state the operator hit (an issue carrying
+// feedback:triaging AND feedback:needs-input) is exactly this invariant violated.
+export const CLAIM_LABEL = 'feedback:triaging';
+export const TERMINAL_LABELS = ['feedback:needs-input', 'feedback:go'];
+
 const epoch = (iso) => Date.parse(iso);
+
+/**
+ * Does a label set violate the claim-vs-terminal invariant — i.e. does it carry
+ * the in-flight claim label AND any terminal-state label at the same time? Every
+ * step that reaches a terminal route (park, go, umbrella, merge) must remove the
+ * claim label in the same transition so this never holds. A reclaim/reset that
+ * adds the claim label must remove the terminal labels for the same reason.
+ * @param {string[]} labels  label NAMES present on the issue
+ * @returns {boolean}
+ */
+export function violatesClaimInvariant(labels) {
+  const set = new Set(labels || []);
+  if (!set.has(CLAIM_LABEL)) return false;
+  return TERMINAL_LABELS.some((t) => set.has(t));
+}
 
 /**
  * Is one claim crashed/stale? Stale iff it is older than the timeout AND the
@@ -76,4 +99,19 @@ export function ownsClaim(myId, claims, ctx) {
  */
 export function isReclaimable(claims, ctx) {
   return resolveOwner(claims, ctx) === null;
+}
+
+/**
+ * When does a still-live claim age out into reclaimable territory? A claim is only
+ * reclaimable once it is past the age threshold AND the issue shows no live work,
+ * so the earliest a stranded claim can be auto-reclaimed is its `created_at` plus
+ * the timeout. The report surfaces this instant so the operator waits for the loop
+ * to self-heal instead of manually resetting `feedback:triaging -> feedback:new`
+ * and racing a live orphan. Returns an ISO-8601 string.
+ * @param {{created_at: string}} claim  the owning (live) claim
+ * @param {number} [timeoutMs]
+ * @returns {string}
+ */
+export function reclaimAtIso(claim, timeoutMs = CLAIM_TIMEOUT_MS) {
+  return new Date(epoch(claim.created_at) + timeoutMs).toISOString();
 }

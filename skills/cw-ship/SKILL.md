@@ -71,7 +71,7 @@ Invoke the **Workflow** tool with `scriptPath` pointing at this skill's `workflo
 
 The Workflow runs headless in the background; you are notified on completion. Do not poll. It performs, in order:
 
-1. **Discover** — union of open `feedback:new` and `feedback:go` issues, minus any already `feedback:triaging`.
+1. **Discover** — union of open `feedback:new` and `feedback:go` issues, plus any `feedback:triaging` issue whose claim has **crashed** (reclaim). A `feedback:triaging` issue with a still-**live** claim is not built; it is surfaced separately as `claimed_elsewhere` (Step 4) rather than silently dropped.
 2. **Plan** — one subagent per issue, in parallel: lock the issue (`feedback:triaging`), read intent, research against the code, and route `fix` / `needs-input` / `umbrella`. A `feedback:go` issue carries the operator's inline answers — the planner treats those forks as settled.
 3. **Resolve** — park the question/scope issues to the body (`feedback:needs-input`); file umbrellas for cleared umbrella-sized issues; build + serial-merge the small ones over a quiescent default branch.
 
@@ -89,13 +89,15 @@ The Workflow returns:
   "planned": [{ "issue": 130, "route": "fix", "disposition": "build" }],
   "built": [{ "issue": 130, "pr": "https://github.com/.../pull/NNN", "merged": true, "cause": null }],
   "umbrellas_filed": [{ "feedback_issue": 141, "umbrella": 142, "url": "...", "sub_issues": [143, 144] }],
-  "escalations": [{ "issue": 137, "url": "...", "reason": "open-questions", "questions": ["..."] }]
+  "escalations": [{ "issue": 137, "url": "...", "reason": "open-questions", "questions": ["..."] }],
+  "claimed_elsewhere": [{ "issue": 138, "url": "...", "last_activity": "...", "claim_age": "12m", "reclaim_at": "..." }]
 }
 ```
 
 Render it with the action item first:
 
 - **`escalations`** — the only thing that needs you: each parked issue, why it parked (`open-questions` or `umbrella-scope`), and the questions now in its body. To unblock, run `/cw-resolve` — it walks you through every parked question and flips them to `feedback:go`. Surface these prominently; everything else was handled.
+- **`claimed_elsewhere`** — issues in scope but **held by another still-live run's claim**; this run did not touch them. Render it as its own section, distinct from `escalations` and from an empty backlog: *"#138 is held by another run, auto-reclaims at `<reclaim_at>` if that run is dead."* This is **not** an action item — do **not** manually reset `feedback:triaging -> feedback:new` to "unstick" it, which races a possibly-live run. The loop auto-reclaims a genuinely dead claim at `reclaim_at` (claim age past `CLAIM_TIMEOUT`, no open PR, no recent activity); wait for that tick. A non-empty `claimed_elsewhere` with an otherwise-empty result means "another run owns this," not "nothing to do."
 - Then summarize what landed: feedback issues merged (`built` where `merged: true`), umbrellas filed (now executing via orchestrate), and anything stalled (`built` where `merged: false`, with cause).
 
 ### Step 4.5: Nudge if anything parked

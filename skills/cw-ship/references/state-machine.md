@@ -51,7 +51,7 @@ Colors (created idempotently by whichever skill runs first):
 
 A loop run processes every issue that is **`feedback:new` OR `feedback:go`** and **NOT a live `feedback:triaging`**, plus any **`feedback:triaging` whose claim has crashed** (reclaim — see the claim contract). The first thing it does to an in-scope issue is **claim** it (post the claim comment, add `feedback:triaging`, remove the entry label, and verify ownership). The last thing it does is one of, each of which **releases the claim** (deletes the run's claim comment) so the issue is no longer held:
 
-- **Resolved:** the PR's `Closes #<issue>` closes the issue on merge; release the claim. Remove `feedback:triaging` (the close handles the label, but the claim comment is deleted explicitly).
+- **Resolved:** the PR's `Closes #<issue>` closes the issue on merge; the merge step removes `feedback:triaging` in the same terminal transition (a closed issue must not keep the in-flight claim label) and releases the claim by deleting the claim comment.
 - **Parked:** add `feedback:needs-input`, remove `feedback:triaging`, release the claim. The `## Open questions` block is appended to the body.
 - **Umbrella handed off:** close the issue with a "tracked by #<umbrella>" comment; remove `feedback:triaging`; release the claim.
 - **Yielded:** the run lost the claim race — it deletes only its **own** losing claim comment and touches nothing else (the winner keeps `feedback:triaging`).
@@ -92,6 +92,23 @@ A claim is **stale (crashed)** iff **all** hold: its `created_at` is older than 
 
 The "no open PR AND no recent update" conjunction is load-bearing: a **dead launcher PID does not mean the run is dead** — a crashed launcher can leave a detached background Workflow still building and merging. If that Workflow is alive it has either an open PR or recent issue activity, so its claim is **not** stale and is never reclaimed. Only a run that has left no live artifact for 2h is treated as crashed. (This is the failure that produced a duplicate PR when a dead-PID lock was trusted: the orphan merged while a second run built a dup. The age+artifact rule prevents it.)
 
+### The claim-vs-terminal label invariant
+
+`feedback:triaging` (the in-flight claim) and the **terminal-state** labels (`feedback:needs-input`, `feedback:go`) are **mutually exclusive**: the claim label means a run holds the issue; a terminal label means the run released it. An issue must **never** carry both at once. Every transition keeps this true in a single step:
+
+- **Claiming** (Plan): the claim edit adds `feedback:triaging` and removes the entry labels (`feedback:new` / `feedback:go`) **and** `feedback:needs-input`. An actively-worked issue is not parked, so re-claiming a previously-parked or just-cleared issue strips the terminal label in the same edit.
+- **Parking**: add `feedback:needs-input`, **remove `feedback:triaging`** (already atomic in the park step).
+- **Merging / closing**: the close is terminal, so the merge step **removes `feedback:triaging`** as the issue closes — a merged feedback issue must not keep the in-flight claim label.
+- **Umbrella handoff**: closing the issue removes `feedback:triaging`.
+
+The both-labels state an operator can hit — an issue carrying `feedback:triaging` **and** `feedback:needs-input` at once — is exactly this invariant violated, and it forces a human hand-clean. `violatesClaimInvariant(labels)` in `claim.mjs` is the pure check (unit-tested in `tests/claim.test.mjs`); `tests/claim-state-machine.test.mjs` pins the claim/merge `gh issue edit` label transitions in `workflow.js` that keep it true.
+
+### Safe recovery of a stuck `feedback:triaging` — wait for the auto-reclaim, do not reset by hand
+
+Do **not** manually reset `feedback:triaging -> feedback:new` to "unstick" an issue: a still-live (possibly orphaned) run may own it, and racing it is what duplicates work. A claim is reclaimable **only when provably dead** by the age rule above (no open PR, no recent `updatedAt`, past `CLAIM_TIMEOUT`), at which point the next loop tick reclaims it automatically.
+
+So a run scoped to a live-claimed issue (`/cw-ship --only <n>` on an issue another run holds) does **not** return a bare empty result — that empty/yielded-with-no-context output is what previously read as "nothing in scope" or "stranded" and invited the wrong manual reset. Discovery instead surfaces it as a first-class **`claimed_elsewhere`** entry `{ issue, url, last_activity, claim_age, reclaim_at }`, and the report renders it as a distinct section: *"held by another run, auto-reclaims at `<reclaim_at>`."* `reclaim_at` is the owning claim's `created_at` plus `CLAIM_TIMEOUT` (computed by `reclaimAtIso` in `claim.mjs`). The operator waits for that instant; the loop self-heals.
+
 ### Idempotency
 
-Every run re-discovers from live labels + claims, so a missed, partial, or crashed run self-heals on the next tick. A stuck `feedback:triaging` is reclaimed automatically once its claim ages out per the rule above — no manual cleanup needed. The pure resolution logic (`isClaimStale` / `resolveOwner` / `ownsClaim` / `isReclaimable`, with `CLAIM_TIMEOUT_MS`) lives in `claim.mjs` and is unit-tested in `tests/claim.test.mjs`; `planPrompt` and `discoverPrompt` in `workflow.js` implement the same rule via gh.
+Every run re-discovers from live labels + claims, so a missed, partial, or crashed run self-heals on the next tick. A stuck `feedback:triaging` is reclaimed automatically once its claim ages out per the rule above — no manual cleanup needed. The pure resolution logic (`isClaimStale` / `resolveOwner` / `ownsClaim` / `isReclaimable` / `violatesClaimInvariant` / `reclaimAtIso`, with `CLAIM_TIMEOUT_MS`) lives in `claim.mjs` and is unit-tested in `tests/claim.test.mjs`; `planPrompt` and `discoverPrompt` in `workflow.js` implement the same rules via gh (pinned by `tests/claim-state-machine.test.mjs`).
