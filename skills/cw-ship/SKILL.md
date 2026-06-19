@@ -1,6 +1,6 @@
 ---
 name: cw-ship
-description: Drain the backlog of dogfooding-feedback issues filed by /cw-feedback. Per issue, plan the change against the actual code, then either autonomously build + squash-merge a single PR (small/medium, intent clear), park genuine design forks back to the issue body for the operator (feedback:needs-input), or file a ready umbrella + hand it to cw-orchestrate (large, operator-cleared). Built to run unattended on a schedule. Trigger when the user wants to process, triage, or act on feedback issues.
+description: Drain the backlog of dogfooding-feedback issues filed by /cw-feedback. Per issue, plan the change against the actual code, then either autonomously build + squash-merge a single PR (small/medium, intent clear), park genuine design forks back to the issue body for the operator (feedback:needs-input), or file a ready umbrella + hand it to cw-orchestrate (large, operator-cleared). An on-demand tool you invoke (`/cw-ship`), not a background timer. Trigger when the user wants to process, triage, or act on feedback issues.
 metadata:
   version: "0.1.0"
   triggers:
@@ -26,7 +26,7 @@ The design mirror is deliberate: this is to `cw-orchestrate` what a self-driving
 
 ## When to Use
 
-On a schedule (the default — see [references/scheduling.md](./references/scheduling.md)) or on demand to process the feedback backlog: "triage the feedback issues", "run the feedback loop", "act on the feedback for <owner>/<repo>". Do **not** use it to capture new feedback (that's `/cw-feedback`) or to execute an existing umbrella (that's `/cw-orchestrate`).
+On demand, when you want to process the feedback backlog: "triage the feedback issues", "run the feedback loop", "act on the feedback for <owner>/<repo>". This is an invoke-it-when-you-want tool, not a background loop; if you nonetheless want to put it on a timer, scheduling is an optional opt-in (see [references/scheduling.md](./references/scheduling.md)). Do **not** use it to capture new feedback (that's `/cw-feedback`) or to execute an existing umbrella (that's `/cw-orchestrate`).
 
 ## Prerequisites
 

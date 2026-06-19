@@ -1,20 +1,12 @@
-# Scheduling cw-ship
+# Scheduling cw-ship (OPTIONAL)
 
-`cw-ship` runs unattended: a scheduler fires the skill non-interactively on a timer, it drains the feedback backlog, and it pages you only when a decision is parked.
+**`cw-ship` is an on-demand tool.** The expected way to run it is to invoke `/cw-ship <owner>/<repo>` yourself when you want the feedback backlog drained; it then plans, builds + merges the clear items, and pages you only when a decision is parked. It is **not** wired to run automatically, and scheduling it is a deliberate opt-in, not the default.
 
-## The easy way: the installer
+This file documents that opt-in for the rare case where you genuinely want `cw-ship` firing on a timer (a scheduler runs it non-interactively, it drains the backlog, it pages you on a parked decision). If you only want it on demand, you don't need anything here.
 
-From a clone of the repo, run the installer and answer the prompts — it detects your OS and wires up the schedule for you:
+> The one-command installer (`scripts/install-scheduler.sh`) does **not** schedule `cw-ship` — it only schedules `cw-sweep`. To put `cw-ship` on a timer, use the manual per-OS recipes below.
 
-```sh
-bash scripts/install-scheduler.sh             # interactive (launchd on macOS, systemd or cron on Linux)
-bash scripts/install-scheduler.sh --dry-run   # preview everything it would write/run, touch nothing
-bash scripts/install-scheduler.sh --uninstall # remove the schedule
-```
-
-Non-interactive: `--repo owner/repo --repo-dir ~/code/repo --times 8:13,14:13,20:13 --yes`.
-
-The rest of this file is the **manual** path — what the installer automates — for Windows, for fine-grained control, or to understand what is being set up. Everything uses `claude -p` (Claude Code's headless invocation); for another runtime, substitute its non-interactive command. Replace `<owner>/<repo>` and the checkout path with yours.
+The recipes use `claude -p` (Claude Code's headless invocation); for another runtime, substitute its non-interactive command. Replace `<owner>/<repo>` and the checkout path with yours.
 
 ## What the schedule relies on
 
@@ -156,7 +148,7 @@ schtasks /delete /tn "cw-ship-am" /f  :: remove
 ## Operating the schedule
 
 - **Run once (test):** the per-OS test command above (`launchctl start` / `systemctl --user start` / run the wrapper directly).
-- **Pause/remove:** `bash scripts/install-scheduler.sh --uninstall`, or remove the unit by hand (`launchctl unload …plist`, `systemctl --user disable --now cw-ship.timer`, or delete the cron block).
+- **Pause/remove:** remove the unit by hand (`launchctl unload …plist`, `systemctl --user disable --now cw-ship.timer`, or delete the cron block). The installer does not manage a `cw-ship` schedule, so there is nothing for it to uninstall here. (To stop running it entirely, just stop invoking `/cw-ship` — that is the on-demand default.)
 - **Stuck `feedback:triaging`:** no manual action needed — a crashed claim is reclaimed automatically once it ages past `CLAIM_TIMEOUT` (2h) with no open PR and no recent update. (There is no lockfile to clear; the old `~/.cache/cw-ship/*.lock` scheme was removed.)
 - **Stuck `feedback:triaging`:** if a crashed run left an issue labeled `feedback:triaging`, remove that label by hand; the next run re-picks it from `feedback:new` / `feedback:go`.
 

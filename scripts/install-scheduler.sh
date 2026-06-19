@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 #
-# install-scheduler.sh — put a CraftWork autonomous loop on a schedule with one command.
+# install-scheduler.sh — put the cw-sweep loop on a schedule with one command.
 #
-# Schedules cw-ship (the continuous feedback-backlog drainer, the default) or
-# cw-sweep (the out-of-band review-residual backlog drain). Detects your OS and
-# wires up the timer: launchd on macOS, a systemd user timer (or cron) on Linux.
-# Interactive by default; prompts for the repo, a local checkout path, and run
-# times, offering sensible defaults. Re-runnable and reversible. Each skill gets
-# its own wrapper, timer, and label, so the two schedules coexist.
+# Schedules cw-sweep (the out-of-band review-residual backlog drain). Detects
+# your OS and wires up the timer: launchd on macOS, a systemd user timer (or
+# cron) on Linux. Interactive by default; prompts for the repo, a local checkout
+# path, and run times, offering sensible defaults. Re-runnable and reversible.
+#
+# cw-ship is intentionally NOT schedulable here — it is an on-demand tool you
+# invoke (`/cw-ship <owner>/<repo>`). `--skill cw-sweep` is required.
 #
 # Usage:
-#   bash install-scheduler.sh                                # interactive (cw-ship)
 #   bash install-scheduler.sh --skill cw-sweep               # interactive (cw-sweep)
-#   bash install-scheduler.sh --skill cw-ship --repo owner/repo \
-#        --repo-dir ~/code/repo --times 8:13,14:13,20:13 --yes
+#   bash install-scheduler.sh --skill cw-sweep --repo owner/repo \
+#        --repo-dir ~/code/repo --times 12:30,21:30 --yes
 #   bash install-scheduler.sh --skill cw-sweep --dry-run     # show what it would do, touch nothing
 #   bash install-scheduler.sh --skill cw-sweep --uninstall   # remove that skill's schedule
 #
@@ -39,23 +39,23 @@ while [ $# -gt 0 ]; do
 done
 
 # ---------- skill selection ----------
-# Each schedulable skill defines its own paths, default cadence, and the headless
-# prompt baked into the generated wrapper. cw-ship runs unattended out of the box;
-# cw-sweep is interactive-first, so its prompt pre-answers the scope/autofix
-# questions to keep a `claude -p` run from blocking (and thus no-opping).
-SKILL="${SKILL:-cw-ship}"
+# The schedulable skill defines its paths, default cadence, and the headless
+# prompt baked into the generated wrapper. cw-sweep is interactive-first, so its
+# prompt pre-answers the scope/autofix questions to keep a `claude -p` run from
+# blocking (and thus no-opping).
+#
+# cw-ship is deliberately not schedulable: it is an on-demand tool you invoke
+# (`/cw-ship <owner>/<repo>`), never a background timer. `--skill cw-sweep` is
+# required — there is no default that would register a cw-ship schedule.
+[ -n "$SKILL" ] || die "--skill is required (only cw-sweep is schedulable; cw-ship is on-demand, run '/cw-ship <owner>/<repo>')"
 case "$SKILL" in
-  cw-ship)
-    DEFAULT_TIMES="8:13,14:13,20:13"
-    SKILL_DESC="feedback backlog loop"
-    PROMPT_LINE='PROMPT="/cw-ship $REPO"'
-    WRAPPER_TRAILER=$'\n# Optional: also execute any umbrellas the loop just filed (idempotent). Uncomment to enable.\n# claude -p "/cw-orchestrate $REPO"' ;;
   cw-sweep)
     DEFAULT_TIMES="12:30,21:30"
     SKILL_DESC="review-residual backlog drain"
     PROMPT_LINE='PROMPT="/cw-sweep $REPO — triage the whole open review-residual backlog with autofix enabled. Run fully non-interactively: do not ask for confirmation; default any operator prompt to scope=whole-backlog, autofix=on."'
     WRAPPER_TRAILER="" ;;
-  *) die "unknown --skill '$SKILL' (expected cw-ship or cw-sweep)" ;;
+  cw-ship) die "cw-ship is not schedulable — it is an on-demand tool. Run '/cw-ship $REPO' when you want it; schedule cw-sweep with '--skill cw-sweep'." ;;
+  *) die "unknown --skill '$SKILL' (only cw-sweep is schedulable)" ;;
 esac
 
 WRAPPER="$HOME/bin/$SKILL.sh"
@@ -248,5 +248,5 @@ echo
 echo "Done — $SKILL will run at $TIMES (local), triaging $REPO."
 echo
 echo "Test it now:    $TEST_CMD"
-echo "Dry run first:  claude -p \"/$SKILL $REPO\"   (cw-ship accepts build:false to plan without merging; cw-sweep can run with autofix off for a first pass)"
+echo "Dry run first:  claude -p \"/$SKILL $REPO\"   (cw-sweep can run with autofix off for a first pass)"
 echo "Uninstall:      bash $0 --skill $SKILL --uninstall"
