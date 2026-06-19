@@ -2,7 +2,7 @@
 
 **You supply the taste. The machine supplies the labor.**
 
-CraftWork is an opinionated suite of agent skills that turns lived-experience feedback into merged pull requests, using **GitHub issues as a durable, asynchronous state machine** and engaging you only at genuine decision points. You observe, you decide, it ships. Everything in between runs unattended.
+CraftWork is an opinionated suite of agent skills that turns lived-experience feedback into merged pull requests, using **GitHub issues as a durable, asynchronous state machine** and engaging you only at genuine decision points. You observe, you decide, it ships — and the agent does the work in between.
 
 It is built for [Claude Code](https://claude.com/claude-code) and any agent runtime that supports the [Agent Skills](https://agentskills.io) standard.
 
@@ -25,17 +25,17 @@ cw-sweep        clean up leftover review notes  -> a tidy backlog
 
 Two tracks share the same philosophy:
 
-- **Everyday track** - you hit a rough edge while using the product, run `cw-feedback`, and the scheduled `cw-ship` loop turns it into a merged change. If it needs a decision, it parks the question into the issue body and pings you; you answer with `cw-resolve` and it finishes on its own.
+- **Everyday track** - you hit a rough edge while using the product, run `cw-feedback`, and when you're ready you invoke `/cw-ship` to turn the backlog into merged changes. If an item needs a decision, it parks the question into the issue body and pings you; you answer with `cw-resolve` and the next run finishes it on its own.
 - **Initiative track** - for deliberate, multi-PR work you run `cw-scope` to shape it, then `cw-orchestrate` to drive it to done, with `cw-sweep` clearing the review residue.
 
-The split maps to the names: **Craft** is what you fire (`cw-feedback`, `cw-resolve`, `cw-scope`); **Work** is what runs on its own (`cw-ship`, `cw-orchestrate`, `cw-sweep`).
+The split maps to the names: **Craft** is what you fire to capture and decide (`cw-feedback`, `cw-resolve`, `cw-scope`); **Work** is what runs hands-off to merge once you invoke it (`cw-ship`, `cw-orchestrate`, `cw-sweep`).
 
 ## The skills
 
 | Skill | Track | What it does |
 |-------|-------|--------------|
 | [`cw-feedback`](skills/cw-feedback) | everyday | Capture a plain-English observation as one GitHub issue. |
-| [`cw-ship`](skills/cw-ship) | everyday | Scheduled loop: plan each captured item against the code, build + merge the clear ones, park the rest, escalate the big ones. |
+| [`cw-ship`](skills/cw-ship) | everyday | On-demand loop you invoke (`/cw-ship`): plan each captured item against the code, build + merge the clear ones, park the rest, escalate the big ones. |
 | [`cw-resolve`](skills/cw-resolve) | everyday | Walk you through the design questions the loop parked, record your answers, release the work. |
 | [`cw-scope`](skills/cw-scope) | initiative | Interactively scope a large initiative into a ready set of sub-issues. |
 | [`cw-orchestrate`](skills/cw-orchestrate) | initiative | Drive a scoped initiative's sub-issues to merged PRs, hands-off. |
@@ -62,48 +62,50 @@ Or as a Claude Code plugin marketplace:
 /plugin marketplace add ALRubinger/craftwork-skills
 ```
 
-The autonomous skills (`cw-ship`, `cw-orchestrate`, `cw-sweep`) drive real merges via `gh`/`git` and are designed to run unattended on a schedule. Read each skill's `SKILL.md` before wiring it to a cron, and start with a dry run.
+The autonomous skills (`cw-ship`, `cw-orchestrate`, `cw-sweep`) drive real merges via `gh`/`git` once you invoke them — `cw-ship` and `cw-orchestrate` are on-demand, and `cw-sweep` can optionally be put on a schedule. Read each skill's `SKILL.md` before running it, and start with a dry run.
 
-## Scheduling the autonomous loops
+## Running the loops
 
-`cw-ship` is the loop you put on a schedule — it is the continuous backlog drainer. `cw-sweep` can optionally be scheduled too (pass `--skill cw-sweep`) to drain the `review-residual` backlog out of band; `cw-orchestrate` already triages its own residuals in-band, so it does not need a timer. Each skill gets its own wrapper, timer, and label, so both schedules coexist.
+`cw-ship` is on-demand — you invoke `/cw-ship <owner>/<repo>` when you want the feedback backlog drained, and `cw-orchestrate` likewise runs when you hand it an umbrella. Neither is wired to a timer.
 
-### One command
+`cw-sweep` is the one loop you may *optionally* put on a schedule, to drain the `review-residual` backlog out of band; `cw-orchestrate` already triages its own residuals in-band, so it does not need one either.
 
-From a clone of this repo:
+### Optional: schedule cw-sweep
+
+Scheduling is strictly opt-in. If you deliberately want `cw-sweep` running on a timer, the installer sets it up. From a clone of this repo:
 
 ```sh
-bash scripts/install-scheduler.sh
+bash scripts/install-scheduler.sh --skill cw-sweep
 ```
 
 or without cloning:
 
 ```sh
-bash <(curl -fsSL https://raw.githubusercontent.com/ALRubinger/craftwork-skills/main/scripts/install-scheduler.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/ALRubinger/craftwork-skills/main/scripts/install-scheduler.sh) --skill cw-sweep
 ```
 
-It detects your OS (launchd on macOS, a systemd user timer or cron on Linux), prompts for the repo, a local checkout path, and run times — with defaults, auto-filled from your current checkout when it can — then writes a wrapper and activates the schedule. Defaults to `cw-ship`. Handy flags:
+It detects your OS (launchd on macOS, a systemd user timer or cron on Linux), prompts for the repo, a local checkout path, and run times — with defaults, auto-filled from your current checkout when it can — then writes a wrapper and activates the schedule. `--skill cw-sweep` is required; `cw-ship` is intentionally not schedulable here. Handy flags:
 
-- `--skill cw-ship|cw-sweep` — which loop to schedule (default `cw-ship`). `cw-sweep` defaults to a lighter `12:30,21:30` cadence and bakes a non-interactive prompt into its wrapper so the headless run does not block on its scope/autofix questions.
+- `--skill cw-sweep` — the only schedulable loop. It defaults to a light `12:30,21:30` cadence and bakes a non-interactive prompt into its wrapper so the headless run does not block on its scope/autofix questions.
 - `--dry-run` — print everything it would write and run, and touch nothing.
-- `--repo owner/repo --repo-dir ~/code/repo --times 8:13,14:13,20:13 --yes` — run it unattended.
-- `--uninstall` — remove the schedule (scoped to `--skill`; pair the two flags, e.g. `--skill cw-sweep --uninstall`).
+- `--repo owner/repo --repo-dir ~/code/repo --times 12:30,21:30 --yes` — run it unattended.
+- `--uninstall` — remove the schedule (pair with `--skill cw-sweep`).
 
 Nothing is Claude-specific beyond the `claude -p` call inside the generated wrapper; swap it for another runtime's headless command if needed.
 
-**Before you let it run unattended, do one manual run and watch it:** `claude -p "/cw-ship <owner>/<repo>"` (the loop accepts `build: false` to plan and park without opening PRs). For `cw-sweep`, run `/cw-sweep <owner>/<repo>` interactively first with autofix off, to eyeball the escalation surface before letting the scheduled run apply fixes.
+**Before you let it run unattended, do one manual run and watch it:** run `/cw-sweep <owner>/<repo>` interactively first with autofix off, to eyeball the escalation surface before letting the scheduled run apply fixes.
 
 ### Other environments
 
-- **Windows, or manual control over the setup:** the per-OS recipes the installer automates — launchd, cron, a systemd timer, and Windows Task Scheduler — are written out step by step in [`skills/cw-ship/references/scheduling.md`](skills/cw-ship/references/scheduling.md).
-- **GitHub Actions cron (no machine required):** a scheduled workflow runs the agent in CI — best for teams. Use [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action) (or your agent's equivalent action) on a `schedule:` trigger; the runner needs a token with merge rights and a bot identity allowed to bypass required review.
-- **Managed cloud routine:** if your platform offers scheduled agent runs (e.g. Claude Code's `/schedule`), point one at `/cw-ship <owner>/<repo>`. Usually a minimum interval around an hour, and billed.
+- **Windows, manual control, or scheduling cw-ship anyway:** the per-OS recipes — launchd, cron, a systemd timer, and Windows Task Scheduler — are written out step by step in [`skills/cw-ship/references/scheduling.md`](skills/cw-ship/references/scheduling.md), where scheduling is documented as a deliberate opt-in rather than the default.
+- **GitHub Actions cron (no machine required):** for a scheduled `cw-sweep`, a workflow can run the agent in CI — best for teams. Use [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action) (or your agent's equivalent action) on a `schedule:` trigger; the runner needs a token with merge rights and a bot identity allowed to bypass required review. (`cw-ship` is on-demand — invoke it from an Action manually, e.g. `workflow_dispatch`, rather than on a timer.)
+- **Managed cloud routine:** if your platform offers scheduled agent runs (e.g. Claude Code's `/schedule`), you can point one at `/cw-sweep <owner>/<repo>`. Usually a minimum interval around an hour, and billed. Invoke `/cw-ship` on demand instead of scheduling it.
 
-### Safety, however you schedule it
+### Safety, however you run them
 
 - These skills perform real merges. **Scope the agent's auth to the target repo** and start with a dry run — `cw-ship` accepts `build: false` to plan and park without opening PRs.
 - In a headless run, **do not override the permission mode in a way that re-introduces interactive prompts** — a prompt with no human to answer it hangs the loop. Rely on a pre-approved allowlist instead.
-- The everyday loop pages you (`cw-ship` fires a notification when it parks a decision), so an unattended schedule still keeps you in the loop exactly when a human judgment is needed — and only then.
+- The everyday loop pages you (`cw-ship` fires a notification when it parks a decision), so even a long unattended `/cw-ship` run keeps you in the loop exactly when a human judgment is needed — and only then.
 
 ## Status
 
