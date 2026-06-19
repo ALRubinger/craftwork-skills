@@ -2,10 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CLAIM_TIMEOUT_MS,
+  CLAIM_LABEL,
+  TERMINAL_LABELS,
   isClaimStale,
   resolveOwner,
   ownsClaim,
   isReclaimable,
+  violatesClaimInvariant,
+  reclaimAtIso,
 } from '../claim.mjs';
 
 // A fixed "now" so tests are deterministic (the module never reads the clock).
@@ -94,6 +98,54 @@ test('discovery rule: an in-flight live claim is NOT reclaimable (excluded)', ()
 
 test('the timeout constant is 2 hours', () => {
   assert.equal(CLAIM_TIMEOUT_MS, 2 * 60 * 60 * 1000);
+});
+
+// --- (4) The claim label and the terminal labels are mutually exclusive -------
+// Regression for feedback #15: an issue ended up carrying BOTH feedback:triaging
+// (the in-flight claim) AND feedback:needs-input (a terminal/parked state) at once.
+// The invariant: the claim label and any terminal-state label can never coexist.
+
+test('violatesClaimInvariant: triaging + a terminal label is a violation', () => {
+  for (const terminal of TERMINAL_LABELS) {
+    assert.equal(
+      violatesClaimInvariant([CLAIM_LABEL, terminal]),
+      true,
+      `${CLAIM_LABEL} + ${terminal} must be flagged as a violation`,
+    );
+  }
+  // The exact both-labels state the operator hit.
+  assert.equal(violatesClaimInvariant(['feedback', 'feedback:triaging', 'feedback:needs-input']), true);
+});
+
+test('violatesClaimInvariant: triaging alone, or a terminal label alone, is fine', () => {
+  assert.equal(violatesClaimInvariant([CLAIM_LABEL]), false);
+  assert.equal(violatesClaimInvariant(['feedback', CLAIM_LABEL]), false);
+  for (const terminal of TERMINAL_LABELS) {
+    assert.equal(violatesClaimInvariant([terminal]), false);
+    assert.equal(violatesClaimInvariant(['feedback', terminal]), false);
+  }
+  assert.equal(violatesClaimInvariant(['feedback:new']), false);
+  assert.equal(violatesClaimInvariant([]), false);
+  assert.equal(violatesClaimInvariant(null), false);
+});
+
+test('violatesClaimInvariant: two terminal labels without the claim is not a claim-invariant violation', () => {
+  // This helper guards the claim/terminal exclusion specifically; it does not
+  // opine on terminal-vs-terminal combinations (those are the operator's go-gate).
+  assert.equal(violatesClaimInvariant(TERMINAL_LABELS), false);
+});
+
+// --- (5) Stranded-claim reclaim time (safe recovery, no manual reset) ---------
+
+test('reclaimAtIso: a stranded claim auto-reclaims at created_at + timeout', () => {
+  const claim = { created_at: '2026-06-18T10:00:00.000Z' };
+  // 2h after the claim was posted.
+  assert.equal(reclaimAtIso(claim), '2026-06-18T12:00:00.000Z');
+});
+
+test('reclaimAtIso: honors an explicit timeout', () => {
+  const claim = { created_at: '2026-06-18T10:00:00.000Z' };
+  assert.equal(reclaimAtIso(claim, 60 * 60 * 1000), '2026-06-18T11:00:00.000Z'); // 1h
 });
 
 test('tolerates null/empty claim sets', () => {

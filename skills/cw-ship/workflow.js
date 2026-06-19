@@ -54,6 +54,26 @@ const DISCOVER_SCHEMA = {
         },
       },
     },
+    // Issues in scope but held by ANOTHER run's still-live claim — a first-class,
+    // legible outcome distinct from "nothing in scope" and from a real escalation.
+    // This is what was missing when an --only run on a live-claimed issue returned a
+    // bare planned:[] that looked identical to an empty backlog and tricked a manual
+    // claim reset. reclaim_at is when the claim ages out and the loop self-heals.
+    claimed_elsewhere: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['issue', 'url', 'last_activity', 'claim_age', 'reclaim_at'],
+        properties: {
+          issue: { type: 'integer' },
+          url: { type: 'string', minLength: 1 },
+          last_activity: { type: 'string' }, // issue updatedAt (ISO-8601)
+          claim_age: { type: 'string' }, // human age of the owning claim, e.g. "12m"
+          reclaim_at: { type: 'string' }, // ISO-8601 instant the claim auto-reclaims
+        },
+      },
+    },
   },
 };
 
@@ -198,7 +218,7 @@ function escalations(planned) {
 // Role prompt builders
 // ---------------------------------------------------------------------------
 
-const discoverPrompt = (a) => `You are enumerating open dogfooding-feedback issues in repo ${a.repo} so they can be triaged, using gh via Bash. These were filed by the /cw-feedback skill and follow a label state machine: feedback:new (fresh), feedback:go (the operator answered earlier open questions and cleared the issue to proceed), and feedback:triaging (a run is actively working it). MULTIPLE cw-ship runs can run on this repo at once — there is NO repo lock; the per-issue claim is what serializes work, so a live feedback:triaging issue belongs to another run and you must NOT surface it. The one exception is a CRASHED claim, which is reclaimable (below).
+const discoverPrompt = (a) => `You are enumerating open dogfooding-feedback issues in repo ${a.repo} so they can be triaged, using gh via Bash. These were filed by the /cw-feedback skill and follow a label state machine: feedback:new (fresh), feedback:go (the operator answered earlier open questions and cleared the issue to proceed), and feedback:triaging (a run is actively working it). MULTIPLE cw-ship runs can run on this repo at once — there is NO repo lock; the per-issue claim is what serializes work, so a live feedback:triaging issue belongs to another run and you must NOT build it. You DO surface it, but as a distinct \`claimed_elsewhere\` entry (not in \`issues\`), so a run scoped to a live-claimed target reports a legible "held by another run, auto-reclaims at <time>" outcome instead of a bare empty result. The one exception that goes into \`issues\` is a CRASHED claim, which is reclaimable (below).
 
 Scope:
 ${
@@ -212,14 +232,19 @@ Steps:
    \`gh issue list --repo ${a.repo} --state open --label feedback:new --json number,title,labels,url,updatedAt --limit 200\`
    \`gh issue list --repo ${a.repo} --state open --label feedback:go --json number,title,labels,url,updatedAt --limit 200\`
    Union them by number; for each set has_go = true iff its labels include feedback:go (these carry the operator's inline answers and are cleared to run autonomously), reclaim = false.
-2. RECLAIM PASS — recover issues stranded by a crashed run. List \`gh issue list --repo ${a.repo} --state open --label feedback:triaging --json number,title,labels,url,updatedAt --limit 200\`. For EACH, decide if its claim has crashed:
+2. RECLAIM PASS — recover issues stranded by a crashed run, and surface live-claimed ones as a first-class outcome. List \`gh issue list --repo ${a.repo} --state open --label feedback:triaging --json number,title,labels,url,updatedAt --limit 200\`${
+  Array.isArray(a.only) && a.only.length
+    ? `, then KEEP ONLY the issues in the --only set (${a.only.join(', ')}) — both crashed reclaims and claimed_elsewhere stay scoped to --only`
+    : ''
+}. For EACH, decide if its claim has crashed:
    a. Read its claim comments: \`gh api repos/${a.repo}/issues/<n>/comments --paginate --jq '.[] | select(.body | contains("<!-- cw-ship/claim -->")) | {id, created_at}'\`.
    b. Check for live work: is there an OPEN PR referencing #<n>? (\`gh pr list --repo ${a.repo} --state open --search "<n> in:body" --json number\`, plus a \`Closes #<n>\` scan).
    c. A claim is CRASHED iff: there is NO open PR for the issue, AND the newest claim comment's created_at is more than 2 HOURS before now, AND the issue's updatedAt is more than 2 hours before now. (Use \`date -u +%s\` for now; compare epoch seconds. A triaging issue with NO claim comment at all — e.g. an old pre-redesign run — also counts as crashed.)
-   d. If crashed → include it with has_go = (labels include feedback:go), reclaim = true. If NOT crashed (live claim, or an open PR, or recently updated) → EXCLUDE it: another run owns it right now.
+   d. If crashed → include it in \`issues\` with has_go = (labels include feedback:go), reclaim = true.
+   e. If NOT crashed (a live claim — an open PR, recently updated, or a claim younger than 2h) → another run owns it RIGHT NOW. Do NOT build it and do NOT silently drop it: add it to \`claimed_elsewhere\` with last_activity = the issue's updatedAt, claim_age = the human age of the newest claim comment relative to now (e.g. "12m", "1h05m"), and reclaim_at = the newest claim comment's created_at PLUS 2 hours, in ISO-8601 (the instant the loop auto-reclaims it if the run stays dead — the operator should WAIT for that rather than manually resetting the label and racing a possibly-live run). This is the distinct, legible signal that was missing when a live-claimed --only target returned a bare empty result that looked identical to "nothing in scope".
 3. url is each issue's html url.
 
-Return structured output: { issues: [{ issue, url, has_go, reclaim, title }] }. Return an empty array if nothing is in scope. NEVER include a feedback:triaging issue that is not provably crashed by the rule above.`;
+Return structured output: { issues: [{ issue, url, has_go, reclaim, title }], claimed_elsewhere: [{ issue, url, last_activity, claim_age, reclaim_at }] }. Return empty arrays when the respective set is empty. NEVER put a live-claimed feedback:triaging issue in \`issues\` — it goes in \`claimed_elsewhere\`; only a provably-crashed claim goes in \`issues\` with reclaim = true.`;
 
 const planPrompt = (a, issue, url, hasGo, reclaim) => `You are triaging ONE dogfooding-feedback issue in repo ${a.repo} (default branch ${a.defaultBranch}) and deciding how it should be resolved. Headless, no human in the loop right now. Use gh + git via Bash; read the actual code.
 
@@ -230,8 +255,8 @@ STEP 0 — CLAIM THIS ISSUE (race-safe; before ANY analysis). Several cw-ship ru
   a. POST your claim and capture its id:
      \`MY_ID=$(gh api repos/${a.repo}/issues/${issue}/comments -f body='<!-- cw-ship/claim -->' --jq .id)\`
      (The comment's server-side created_at + id ARE your claim's identity — do not self-stamp a timestamp.)
-  b. Mark the issue in-flight and clear the entry labels (idempotent — harmless if a racing run already did it; create labels if missing):
-     \`gh issue edit ${issue} --repo ${a.repo} --add-label feedback:triaging --remove-label feedback:new --remove-label feedback:go\`
+  b. Mark the issue in-flight and clear the entry AND terminal labels (idempotent — harmless if a racing run already did it; create labels if missing). feedback:triaging and the terminal labels are MUTUALLY EXCLUSIVE: an actively-worked issue is not parked, so claiming it removes feedback:needs-input too (a reclaim of a stranded park, or a feedback:go re-entry, must not leave the issue carrying both the claim label and a terminal label — that both-labels state is the invariant violation this fixes):
+     \`gh issue edit ${issue} --repo ${a.repo} --add-label feedback:triaging --remove-label feedback:new --remove-label feedback:go --remove-label feedback:needs-input\`
      (create: \`gh label create feedback:triaging --repo ${a.repo} --color 1D76DB --description "A cw-ship run is working this issue" 2>/dev/null || true\`)
   c. VERIFY OWNERSHIP — re-read EVERY claim comment, then apply the rule:
      \`gh api repos/${a.repo}/issues/${issue}/comments --paginate --jq '.[] | select(.body | contains("<!-- cw-ship/claim -->")) | {id, created_at}'\`
@@ -306,7 +331,7 @@ Steps:
 1. \`git fetch origin ${a.defaultBranch} ${built.branch}\`.
 2. PRE-MERGE CONFLICT CHECK against FRESH ${a.defaultBranch}: \`git merge-tree --write-tree --name-only origin/${a.defaultBranch} origin/${built.branch}\`. If it reports a conflict, do NOT merge: try ONE clean rebase of the branch onto fresh ${a.defaultBranch} and push with --force-with-lease; if it still conflicts or needs human judgment, report merged:false, cause "pre-merge conflict against ${a.defaultBranch}".
 3. If clean: \`gh pr merge ${built.pr_number} --repo ${a.repo} --squash --admin --delete-branch\`. If gh reports the PR is out of date / not mergeable because the base moved (another run merged first), that is EXPECTED under concurrency — re-fetch ${a.defaultBranch}, re-run the merge-tree check, rebase onto fresh ${a.defaultBranch} if needed, and retry the merge ONCE. Still failing → report merged:false, cause "base moved; needs rebase".
-4. Verify: PR state is MERGED; branch is gone (\`git ls-remote --heads origin ${built.branch}\` empty — if not, \`git push origin --delete ${built.branch}\`). The merge closes feedback #${built.issue} via the Closes line; confirm it is closed${claimCommentId ? `, then RELEASE this run's claim (\`gh api -X DELETE repos/${a.repo}/issues/comments/${claimCommentId} 2>/dev/null || true\`) — the issue is done` : ''}.
+4. Verify and complete the terminal transition: PR state is MERGED; branch is gone (\`git ls-remote --heads origin ${built.branch}\` empty — if not, \`git push origin --delete ${built.branch}\`). The merge closes feedback #${built.issue} via the Closes line; confirm it is closed. Closing is a TERMINAL transition, so remove the in-flight claim label in the same step — feedback:triaging and a closed/terminal state are mutually exclusive and a merged feedback issue must not keep the in-flight claim label: \`gh issue edit ${built.issue} --repo ${a.repo} --remove-label feedback:triaging 2>/dev/null || true\`${claimCommentId ? `, then RELEASE this run's claim (\`gh api -X DELETE repos/${a.repo}/issues/comments/${claimCommentId} 2>/dev/null || true\`) — the issue is done` : ''}.
 5. Post-merge CI: check ${a.defaultBranch} CI for the merge commit is green.
 
 Green = PR MERGED AND post-merge ${a.defaultBranch} CI green. Anything else is not green; report the cause. Never force-resolve a conflict. If the merge does NOT land, leave feedback:triaging and the claim in place — the issue stays held (its open PR is a stalled-but-live claim, not a crashed one).
@@ -352,9 +377,18 @@ const discovered = await agent(discoverPrompt(cfg), {
   schema: DISCOVER_SCHEMA,
 });
 const issues = (discovered && discovered.issues) || [];
-log(`Discovered ${issues.length} open feedback issue(s) in scope.`);
+// Issues held by another run's still-live claim. A first-class outcome, distinct
+// from an empty backlog: an --only run whose target is live-claimed lands here
+// (not in `issues`), so the report says "held, auto-reclaims at <time>" instead of
+// a bare empty result that previously read as "nothing to do" / "stranded".
+const claimed_elsewhere = (discovered && discovered.claimed_elsewhere) || [];
+log(
+  `Discovered ${issues.length} open feedback issue(s) in scope` +
+    (claimed_elsewhere.length ? `; ${claimed_elsewhere.length} held by another run (claimed_elsewhere)` : '') +
+    '.',
+);
 if (issues.length === 0) {
-  return { repo: cfg.repo, planned: [], built: [], umbrellas_filed: [], escalations: [], yielded: [] };
+  return { repo: cfg.repo, planned: [], built: [], umbrellas_filed: [], escalations: [], yielded: [], claimed_elsewhere };
 }
 
 // --- Plan (claim + classify), one subagent per issue, in parallel ----------
@@ -444,9 +478,11 @@ const report = {
   umbrellas_filed,
   escalations: escalations(planned),
   yielded, // issues this run claimed but another run owned — left for the owner, not double-built
+  claimed_elsewhere, // discovery saw these in scope but live-claimed; never built — wait for reclaim_at
 };
 log(
   `Done. planned=${report.planned.length} merged=${report.built.filter((b) => b.merged).length}/${report.built.length} ` +
-    `umbrellas=${report.umbrellas_filed.length} parked=${report.escalations.length} yielded=${report.yielded.length}`,
+    `umbrellas=${report.umbrellas_filed.length} parked=${report.escalations.length} yielded=${report.yielded.length} ` +
+    `claimed_elsewhere=${report.claimed_elsewhere.length}`,
 );
 return report;
