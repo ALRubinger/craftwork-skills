@@ -8,22 +8,29 @@
 |-------|---------|--------|
 | `cw-feedback` | This issue is a piece of dogfooding feedback (filter handle). | capture |
 | `cw-feedback:new` | Captured, awaiting first triage. | capture |
+| `cw-feedback:hold` | Cataloged but on hold: in the backlog, **excluded from discovery** until released. Mutually exclusive with every other state label. | capture or **the operator** |
 | `cw-feedback:triaging` | A run holds this issue (paired with a `<!-- cw-ship/claim -->` comment that records the owner). Not a lock — it marks the issue as claimed; ownership and crash-recovery are resolved by the claim, see the claim contract below. | the loop, while in flight |
 | `cw-feedback:needs-input` | Parked: open questions are written into the body; waiting on the operator. | the loop |
 | `cw-feedback:go` | The operator answered the open questions and cleared this to proceed fully autonomously. | **the operator** |
 
 Colors (created idempotently by whichever skill runs first):
-`cw-feedback` 0E8A16 · `cw-feedback:new` FBCA04 · `cw-feedback:triaging` 1D76DB · `cw-feedback:needs-input` D93F0B · `cw-feedback:go` 0E8A16.
+`cw-feedback` 0E8A16 · `cw-feedback:new` FBCA04 · `cw-feedback:hold` C5DEF5 · `cw-feedback:triaging` 1D76DB · `cw-feedback:needs-input` D93F0B · `cw-feedback:go` 0E8A16.
 
 ## States and transitions
 
 ```
             capture
                │
-               ▼
-        ┌─────────────┐
-        │ cw-feedback:new │
-        └──────┬───────┘
+      ┌────────┴─────────┐
+      │ "on hold"        │ (default)
+      ▼                  ▼
+┌──────────────────┐  ┌─────────────┐
+│ cw-feedback:hold │  │ cw-feedback:new │
+│ (in backlog,     │  └──────┬───────┘
+│  not discovered) │         │
+└────────┬─────────┘         │
+         │ operator hand-swaps :hold → :new
+         └──────────►────────┤
                │  loop picks up (also picks up cw-feedback:go)
                ▼
         ┌──────────────────┐
@@ -56,6 +63,12 @@ A loop run processes every issue that is **`cw-feedback:new` OR `cw-feedback:go`
 - **Umbrella handed off:** close the issue with a "tracked by #<umbrella>" comment; remove `cw-feedback:triaging`; release the claim.
 - **Yielded:** the run lost the claim race — it deletes only its **own** losing claim comment and touches nothing else (the winner keeps `cw-feedback:triaging`).
 - **Stalled:** the build left an open PR but did not merge → **keep** `cw-feedback:triaging` AND the claim. A stalled issue with an open PR is held, not crashed; the open PR is what tells a later run's reclaim check the work is still live.
+
+## The hold state (cataloged, out of scope until released)
+
+`cw-feedback:hold` lets feedback be filed — or flipped after the fact — into the backlog **without** entering the loop. A held issue carries `cw-feedback` + `cw-feedback:hold` and **no other state label**: hold is mutually exclusive with `:new`, `:triaging`, `:needs-input`, and `:go` (the same single-source-of-truth posture as the claim-vs-terminal invariant below — never two state labels at once). The pickup query lists only `:new`, `:go`, and (for the reclaim pass) `:triaging`; it never lists `:hold`, so a held issue is invisible to discovery by construction — no extra filter needed.
+
+**Releasing a hold is an operator action**, parallel to the hand-flip that adds `:go`: swap `cw-feedback:hold` → `cw-feedback:new` (`gh issue edit <n> --add-label cw-feedback:new --remove-label cw-feedback:hold`), and the issue re-enters the loop on the next run as a fresh `:new`. It is **not** released through `/cw-resolve` — a held issue has no parked questions, so cw-resolve has nothing to ask. If a run is scoped directly at a held issue (`/cw-ship --only <n>`), discovery surfaces it as a legible `held` outcome ("on hold, skipped") rather than silently dropping it.
 
 ## Why two parking reasons share one state
 

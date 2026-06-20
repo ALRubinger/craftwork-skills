@@ -2,6 +2,8 @@
 
 The capture skill files exactly one issue per observation, with both `cw-feedback` and `cw-feedback:new` labels. The body is intentionally small — it records *intent*, and the triage loop researches the *how*.
 
+**Held variant.** When the feedback is cataloged but not actionable yet ("on hold", "keep it in the backlog"), file the same body but swap the entry label: the issue carries `cw-feedback` + `cw-feedback:hold` and **no** `cw-feedback:new` (or any other state label). `cw-feedback:hold` is a mutually-exclusive state — cw-ship's discovery never lists it, so a held issue stays in the backlog, invisible to the loop until an operator hand-swaps it back to `:new`. See the state machine's [Labels table](../../cw-ship/references/state-machine.md).
+
 ## Title
 
 `<kind>: <imperative summary of the desired change>`

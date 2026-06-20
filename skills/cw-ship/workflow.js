@@ -77,6 +77,24 @@ const DISCOVER_SCHEMA = {
         },
       },
     },
+    // Issues carrying cw-feedback:hold — cataloged in the backlog but out of scope
+    // for the loop until an operator hand-swaps :hold -> :new. Held issues are
+    // invisible to the unscoped query by construction; this field exists so an
+    // --only run targeting a held issue surfaces a legible "on hold, skipped"
+    // outcome instead of a silent empty result.
+    held: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['issue', 'url'],
+        properties: {
+          issue: { type: 'integer' },
+          url: { type: 'string', minLength: 1 },
+          title: { type: 'string' },
+        },
+      },
+    },
   },
 };
 
@@ -273,11 +291,13 @@ function mergeVerdict(m) {
 
 const discoverPrompt = (a) => `You are enumerating open dogfooding-feedback issues in repo ${a.repo} so they can be triaged, using gh via Bash. These were filed by the /cw-feedback skill and follow a label state machine: cw-feedback:new (fresh), cw-feedback:go (the operator answered earlier open questions and cleared the issue to proceed), and cw-feedback:triaging (a run is actively working it). MULTIPLE cw-ship runs can run on this repo at once — there is NO repo lock; the per-issue claim is what serializes work, so a live cw-feedback:triaging issue belongs to another run and you must NOT build it. You DO surface it, but as a distinct \`claimed_elsewhere\` entry (not in \`issues\`), so a run scoped to a live-claimed target reports a legible "held by another run, auto-reclaims at <time>" outcome instead of a bare empty result. The one exception that goes into \`issues\` is a CRASHED claim, which is reclaimable (below).
 
+There is also a HOLD state, cw-feedback:hold: an issue cataloged in the backlog but intentionally OUT OF SCOPE until an operator hand-swaps :hold -> :new. It is mutually exclusive with every other state label, so an unscoped run never sees it — the entry-state queries below list only :new and :go and never list :hold. You must NOT build a held issue. The ONLY time it matters is an --only run scoped directly at a held issue: surface it in \`held\` (not \`issues\`) so the run reports a legible "on hold, skipped" outcome instead of a bare empty result that looks like "nothing in scope".
+
 Scope:
 ${
   Array.isArray(a.only) && a.only.length
-    ? `Only these issue numbers: ${a.only.join(', ')}. Include each that is open and carries cw-feedback:new or cw-feedback:go, OR is cw-feedback:triaging with a CRASHED claim (reclaim rule below); drop the rest.`
-    : `Every OPEN issue labeled cw-feedback:new OR cw-feedback:go, PLUS any cw-feedback:triaging issue whose claim has crashed (reclaim rule below).`
+    ? `Only these issue numbers: ${a.only.join(', ')}. Include each that is open and carries cw-feedback:new or cw-feedback:go, OR is cw-feedback:triaging with a CRASHED claim (reclaim rule below); drop the rest. An --only target that instead carries cw-feedback:hold is OUT OF SCOPE — do NOT build it; surface it in \`held\` (step 2b below).`
+    : `Every OPEN issue labeled cw-feedback:new OR cw-feedback:go, PLUS any cw-feedback:triaging issue whose claim has crashed (reclaim rule below). Held issues (cw-feedback:hold) are out of scope and never appear here.`
 }
 
 Steps:
@@ -285,7 +305,11 @@ Steps:
    \`gh issue list --repo ${a.repo} --state open --label cw-feedback:new --json number,title,labels,url,updatedAt --limit 200\`
    \`gh issue list --repo ${a.repo} --state open --label cw-feedback:go --json number,title,labels,url,updatedAt --limit 200\`
    Union them by number; for each set has_go = true iff its labels include cw-feedback:go (these carry the operator's inline answers and are cleared to run autonomously), reclaim = false.
-2. RECLAIM PASS — recover issues stranded by a crashed run, and surface live-claimed ones as a first-class outcome. List \`gh issue list --repo ${a.repo} --state open --label cw-feedback:triaging --json number,title,labels,url,updatedAt --limit 200\`${
+${
+  Array.isArray(a.only) && a.only.length
+    ? `1b. HOLD CHECK (only matters for --only). For each --only target NOT already matched above, read its labels (\`gh issue view <n> --repo ${a.repo} --json number,title,labels,url,state\`). If it is OPEN and carries cw-feedback:hold, add it to \`held\` as { issue, url, title } and do NOT include it in \`issues\` — it is cataloged but out of scope until an operator swaps :hold -> :new. (Unscoped runs skip this step entirely: held issues never match the entry-state queries.)\n`
+    : ''
+}2. RECLAIM PASS — recover issues stranded by a crashed run, and surface live-claimed ones as a first-class outcome. List \`gh issue list --repo ${a.repo} --state open --label cw-feedback:triaging --json number,title,labels,url,updatedAt --limit 200\`${
   Array.isArray(a.only) && a.only.length
     ? `, then KEEP ONLY the issues in the --only set (${a.only.join(', ')}) — both crashed reclaims and claimed_elsewhere stay scoped to --only`
     : ''
@@ -297,7 +321,7 @@ Steps:
    e. If NOT crashed (a live claim — an open PR, recently updated, or a claim younger than 2h) → another run owns it RIGHT NOW. Do NOT build it and do NOT silently drop it: add it to \`claimed_elsewhere\` with last_activity = the issue's updatedAt, claim_age = the human age of the newest claim comment relative to now (e.g. "12m", "1h05m"), and reclaim_at = the newest claim comment's created_at PLUS 2 hours, in ISO-8601 (the instant the loop auto-reclaims it if the run stays dead — the operator should WAIT for that rather than manually resetting the label and racing a possibly-live run). This is the distinct, legible signal that was missing when a live-claimed --only target returned a bare empty result that looked identical to "nothing in scope".
 3. url is each issue's html url.
 
-Return structured output: { issues: [{ issue, url, has_go, reclaim, title }], claimed_elsewhere: [{ issue, url, last_activity, claim_age, reclaim_at }] }. Return empty arrays when the respective set is empty. NEVER put a live-claimed cw-feedback:triaging issue in \`issues\` — it goes in \`claimed_elsewhere\`; only a provably-crashed claim goes in \`issues\` with reclaim = true.`;
+Return structured output: { issues: [{ issue, url, has_go, reclaim, title }], claimed_elsewhere: [{ issue, url, last_activity, claim_age, reclaim_at }], held: [{ issue, url, title }] }. Return empty arrays when the respective set is empty. NEVER put a live-claimed cw-feedback:triaging issue in \`issues\` — it goes in \`claimed_elsewhere\`; only a provably-crashed claim goes in \`issues\` with reclaim = true. NEVER put a cw-feedback:hold issue in \`issues\` — it goes in \`held\` (and only ever when explicitly --only-targeted).`;
 
 const planPrompt = (a, issue, url, hasGo, reclaim) => `You are triaging ONE dogfooding-feedback issue in repo ${a.repo} (default branch ${a.defaultBranch}) and deciding how it should be resolved. Headless, no human in the loop right now. Use gh + git via Bash; read the actual code.
 
@@ -442,13 +466,19 @@ const issues = (discovered && discovered.issues) || [];
 // (not in `issues`), so the report says "held, auto-reclaims at <time>" instead of
 // a bare empty result that previously read as "nothing to do" / "stranded".
 const claimed_elsewhere = (discovered && discovered.claimed_elsewhere) || [];
+// Issues carrying cw-feedback:hold that an --only run targeted directly. Out of
+// scope for the loop (cataloged in the backlog until an operator swaps :hold ->
+// :new), surfaced here so an --only run on a held target reports "on hold,
+// skipped" instead of a bare empty result. Unscoped runs never see these.
+const held = (discovered && discovered.held) || [];
 log(
   `Discovered ${issues.length} open feedback issue(s) in scope` +
     (claimed_elsewhere.length ? `; ${claimed_elsewhere.length} held by another run (claimed_elsewhere)` : '') +
+    (held.length ? `; ${held.length} on hold (skipped)` : '') +
     '.',
 );
 if (issues.length === 0) {
-  return { repo: cfg.repo, planned: [], built: [], umbrellas_filed: [], escalations: [], yielded: [], claimed_elsewhere };
+  return { repo: cfg.repo, planned: [], built: [], umbrellas_filed: [], escalations: [], yielded: [], claimed_elsewhere, held };
 }
 
 // --- Plan (claim + classify), one subagent per issue, in parallel ----------
@@ -547,10 +577,11 @@ const report = {
   escalations: escalations(planned),
   yielded, // issues this run claimed but another run owned — left for the owner, not double-built
   claimed_elsewhere, // discovery saw these in scope but live-claimed; never built — wait for reclaim_at
+  held, // --only targets carrying cw-feedback:hold — out of scope; on hold, skipped
 };
 log(
   `Done. planned=${report.planned.length} merged=${report.built.filter((b) => b.merged).length}/${report.built.length} ` +
     `umbrellas=${report.umbrellas_filed.length} parked=${report.escalations.length} yielded=${report.yielded.length} ` +
-    `claimed_elsewhere=${report.claimed_elsewhere.length}`,
+    `claimed_elsewhere=${report.claimed_elsewhere.length} held=${report.held.length}`,
 );
 return report;

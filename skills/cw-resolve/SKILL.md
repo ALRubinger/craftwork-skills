@@ -121,5 +121,6 @@ Summarize: issues cleared to `:go` or closed (with the decisions made), issues s
 - **Skip is first-class.** Parking is async by design; the user answers when ready. Never pressure a decision or invent one to clear the queue.
 - **Answers are data for a headless re-read.** Write them so the next triage planner can act with zero ambiguity. A vague "**Answer:** sure" re-parks; "**Answer:** show the banner once per session, keyed on the session id" gets built.
 - **One go signal, owned by the user.** This skill is the *only* automated thing that adds `cw-feedback:go` / `cw-review-residual:go` — and it does so only after the user actually answered. Neither loop self-clears a park.
+- **Holds are not parked questions.** `cw-feedback:hold` issues (cataloged but on hold) are *not* drained here — a held issue has no open questions to answer. Release a hold by hand-swapping `cw-feedback:hold` → `cw-feedback:new` (see the [cw-feedback skill](../cw-feedback/SKILL.md)), not through this inbox.
 - **Two queues, one habit.** Feedback and cw-review-residual decisions land in the same inbox and clear the same way (read the parked block, answer, the label flips). cw-sweep can also ask its own escalations inline during an interactive run, but anything left parked — by either loop — drains here.
 - **`gh`/`git` via Bash**, not MCP — matches the rest of the pipeline.
