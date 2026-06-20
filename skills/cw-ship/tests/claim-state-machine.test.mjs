@@ -99,7 +99,7 @@ test('the Workflow report includes claimed_elsewhere on both return paths', () =
   // sites specifically.
   assert.match(
     workflowSrc,
-    /return \{ repo: cfg\.repo, planned: \[\][^}]*claimed_elsewhere \};/,
+    /return \{ repo: cfg\.repo, planned: \[\][^}]*claimed_elsewhere[^}]*\};/,
     'the empty-backlog early return must include claimed_elsewhere',
   );
   assert.match(

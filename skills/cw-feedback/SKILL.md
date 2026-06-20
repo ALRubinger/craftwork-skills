@@ -76,6 +76,7 @@ The handoff to cw-ship runs on a label state machine (see [cw-ship/references/st
 ```sh
 gh label create cw-feedback        --repo <repo> --color 0E8A16 --description "Dogfooding feedback (feedback->cw-ship pipeline)" 2>/dev/null || true
 gh label create cw-feedback:new    --repo <repo> --color FBCA04 --description "Captured feedback awaiting triage" 2>/dev/null || true
+gh label create cw-feedback:hold   --repo <repo> --color C5DEF5 --description "Cataloged but on hold — excluded from cw-ship discovery until released" 2>/dev/null || true
 ```
 
 (The triage loop owns creating its downstream states — `cw-feedback:triaging`, `cw-feedback:needs-input`, `cw-feedback:go`. Creating them here too is harmless; the two label sets are documented in the state-machine reference.)
@@ -95,6 +96,27 @@ gh issue create --repo <repo> \
 
 Report back the issue URL and a one-line summary of what you captured, and tell the user it'll be picked up on the next `/cw-ship` loop. That's the whole job — do not start working the issue.
 
+#### Filing (or marking) feedback on hold
+
+If the user signals the feedback should be **cataloged but not acted on yet** — "put this on hold", "keep it in the backlog", "not actionable yet", "file it but don't ship it" — file it in the **held** state instead: same body, but swap the entry label so it is `cw-feedback` + `cw-feedback:hold` and carries **no** `cw-feedback:new`.
+
+```sh
+gh issue create --repo <repo> \
+  --title "<kind>: <imperative summary>" \
+  --label cw-feedback --label cw-feedback:hold \
+  --body-file <body.md>
+```
+
+`cw-feedback:hold` is a mutually-exclusive **state** label: a held issue carries it and no other state label (`:new`/`:triaging`/`:needs-input`/`:go`). cw-ship's discovery never lists `cw-feedback:hold`, so a held issue sits in the backlog, fully cataloged, invisible to the loop until released.
+
+To **flag an already-filed issue** on hold after the fact, hand-swap its entry label the same way:
+
+```sh
+gh issue edit <n> --repo <repo> --add-label cw-feedback:hold --remove-label cw-feedback:new
+```
+
+**Releasing a hold** is a deliberate operator action: swap the label back to `:new` (`gh issue edit <n> --add-label cw-feedback:new --remove-label cw-feedback:hold`), parallel to the hand-flip that adds `cw-feedback:go`. It is *not* released through `/cw-resolve` — a held issue has no parked questions to answer.
+
 ## Key Notes
 
 - **One observation, one issue.** Don't bundle three gripes into one issue; the triage loop plans per-issue. File three.
@@ -102,3 +124,4 @@ Report back the issue URL and a one-line summary of what you captured, and tell 
 - **Cheap by design.** No planning, no scoping, no PR. If you find yourself asking more than one question, stop — that depth belongs in the triage loop's preflight, which syncs back through the issue body.
 - **`gh`/`git` via Bash**, not MCP — matches the downstream headless loop.
 - **The label is the contract.** `cw-feedback:new` is what the loop's discovery query looks for. Don't file with a different label and expect pickup.
+- **Hold parks it in the backlog, not the loop.** `cw-feedback:hold` is the entry-label swap for "catalog it but don't ship yet" — it is mutually exclusive with every other state label and is excluded from discovery. Release it by hand-swapping back to `:new`; not via `/cw-resolve`.
