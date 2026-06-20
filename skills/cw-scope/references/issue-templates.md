@@ -17,10 +17,10 @@ should understand the initiative from this alone. Plain prose, no jargon.>
 | <fork> | <chosen option + one-line rationale; quote any exact strings verbatim> |
 | ... | ... |
 
-## Sub-issues
-- [ ] #__SUB1__ — <title>
-- [ ] #__SUB2__ — <title>
-- [ ] ...
+<!-- Sub-issues are tracked as GitHub NATIVE sub-issues (the issue's sub-issue
+     widget), not a body checklist. Create them and link with `addSubIssue` per
+     the creation recipe below; do not list them here — the native widget is the
+     single source of truth for the child set, their titles, and their state. -->
 
 ## Recommended dependencies (for the orchestrate readiness sweep)
 - #__SUB2__ `depends_on` #__SUB1__ (<why — logical, not file-overlap>)
@@ -91,13 +91,14 @@ Keep implementation design out of these bodies **except** where a decision is th
 
 ## Creation recipe
 
-GitHub issue numbers don't exist until creation, so create then backfill cross-references. Write each body to a scratch file and create with `--body-file` — never hand-escape backticks or `- [ ]`.
+GitHub issue numbers don't exist until creation, so create then backfill cross-references. Write each body to a scratch file and create with `--body-file` — never hand-escape backticks.
 
 1. **Write body files** to a scratch dir (e.g. `mktemp -d`). Use placeholder tokens for not-yet-known numbers: `#__UMBRELLA__`, `#__SUB1__` … `#__SUBn__`.
 
-2. **Create the umbrella first** and capture its number:
+2. **Create the umbrella first** and capture its number and GraphQL node id (the node id is what native linking needs):
    ```bash
    UMB=$(gh issue create --title "<umbrella title>" --body-file umbrella.md [--label <label>] | grep -oE '[0-9]+$')
+   UMB_ID=$(gh issue view "$UMB" --json id -q .id)
    ```
 
 3. **Create each sub-issue.** Replace `#__UMBRELLA__` in the sub-issue files with `$UMB` before creating, then capture each number:
@@ -107,7 +108,17 @@ GitHub issue numbers don't exist until creation, so create then backfill cross-r
    # ...repeat for S2..Sn
    ```
 
-4. **Backfill cross-references.** Replace `#__SUBn__` placeholders across the umbrella body and any sub-issue that references a sibling, then re-upload the corrected bodies:
+4. **Link each sub-issue to the umbrella as a native sub-issue.** This *is* the parent↔child relationship — there is no body checklist. `gh` has no first-class command (as of 2.94), so use the GraphQL `addSubIssue` mutation with node ids:
+   ```bash
+   for S in "$S1" "$S2" "..."; do
+     CHILD_ID=$(gh issue view "$S" --json id -q .id)
+     gh api graphql -f query='mutation($p:ID!,$c:ID!){ addSubIssue(input:{issueId:$p, subIssueId:$c}){ issue{ number } } }' \
+       -f p="$UMB_ID" -f c="$CHILD_ID" >/dev/null
+   done
+   ```
+   Order matters: `addSubIssue` appends, so add them in the reading order you want the widget to show.
+
+5. **Backfill sibling cross-references.** Replace `#__SUBn__` placeholders in the umbrella's `## Recommended dependencies` section and in any sub-issue `## Dependency` line, then re-upload the corrected bodies:
    ```bash
    sed -i '' "s/__SUB1__/$S1/g; s/__SUB2__/$S2/g; ..." umbrella.md sub2.md ...
    gh issue edit "$UMB" --body-file umbrella.md
@@ -116,22 +127,31 @@ GitHub issue numbers don't exist until creation, so create then backfill cross-r
    grep -l "__SUB\|__UMBRELLA__" *.md || echo clean
    ```
 
-5. **Link to the parent**, mirroring its convention (detected in SKILL.md Step 0):
-   - **Body-checklist parent** (most common for milestone issues): fetch the parent body, append a checklist line under the right section, re-upload:
-     ```bash
-     gh issue view <parent> --json body --jq .body > parent.md
-     # append: - [ ] <umbrella title> (#<UMB>) — <one line>
-     gh issue edit <parent> --body-file parent.md
-     ```
-   - **Native sub-issue parent:** create the native relationship via the GraphQL `addSubIssue` mutation (gh has no first-class command as of 2.94). Only do this if the parent actually uses native sub-issues.
+6. **Link the umbrella up to its own parent** (only if it is a child of an existing milestone/epic), mirroring *that parent's* convention — see "Detecting the parent's linking convention" below. This is the one place a `- [ ]` checklist may still be written: into a human milestone we don't own.
 
-6. **Verify** the tree: `gh issue view <UMB>` shows the filled checklist and deps; each sub-issue shows its `Parent:` line; the parent shows the umbrella link.
+7. **Verify** the tree: `gh issue view <UMB> --json subIssues` lists every sub-issue; each sub-issue shows its `Parent:` line and appears in the umbrella's sub-issue widget; the umbrella itself appears under its own parent.
 
-## Detecting the parent's linking convention
+## Detecting the parent's linking convention (umbrella → its own parent)
+
+This applies **only** to linking the umbrella *up* into an existing parent you don't own. A cw-skill umbrella always tracks its **own** sub-issues natively (Step 4) — that is not a choice to detect.
 
 ```bash
-gh issue view <parent> --json subIssues --jq '.subIssues.totalCount'   # 0 ⇒ body-checklist convention
-gh issue view <parent> --json body --jq .body | grep -oE '#[0-9]+'      # children referenced inline ⇒ checklist
+gh issue view <parent> --json subIssues --jq '.subIssues.totalCount'   # >0 ⇒ native sub-issues
+gh issue view <parent> --json body --jq .body | grep -oE '#[0-9]+'      # inline #NNN refs ⇒ body-checklist milestone
 ```
 
-A `totalCount` of 0 with inline `#NNN` references in the body means the parent tracks children by checklist — mirror that. A non-zero `totalCount` means native sub-issues — use `addSubIssue`.
+A non-zero `totalCount` means the parent uses native sub-issues — link with `addSubIssue` (umbrella as the child, same mutation as Step 4). A `totalCount` of 0 with inline `#NNN` references means a human milestone that tracks children by checklist — append a `- [ ] <umbrella title> (#<UMB>)` line to its body and re-upload, mirroring what's there.
+
+## Porting a legacy checkbox umbrella to native sub-issues
+
+A pre-migration umbrella tracks its children in a `## Sub-issues` body checklist (`- [ ] #NNN`). Convert it once so there is a single source of truth — the native widget — and no stale checklist. `scripts/port-umbrella-to-native-subissues.sh <umbrella>` automates the mechanical core; the recipe it follows:
+
+1. **Extract the listed children.** Pull every `#NNN` from the `## Sub-issues` section of the umbrella body (`gh issue view <umbrella> --json body -q .body`). The checkbox state is **not** carried over — a child's open/closed issue state is already the truth; `[x]` on an open issue was drift the migration drops.
+
+2. **Link each as a native sub-issue.** For each `#NNN`, run the Step 4 `addSubIssue` mutation (umbrella node id as parent, child node id as child). `addSubIssue` is idempotent enough to re-run — a child already linked just errors harmlessly; ignore those.
+
+3. **Translate trailing annotations to the native model.** A line like `- [ ] #984 — **stalled**: <cause>, PR #NNN open` or `— **deferred**: <why>` carried per-child status the checklist could hold but native links can't. Move it onto the child: `gh issue edit #984 --add-label cw-status:stalled` (or `cw-status:deferred`) and post a `<!-- cw:status -->` comment with the reason text. A line with no annotation and a closed issue needs nothing; an open, unannotated line is just in-flight work.
+
+4. **Strip the `## Sub-issues` section** from the umbrella body and re-upload (`gh issue edit <umbrella> --body-file <stripped>`). Leave every other section (Why, Resolved decisions, Recommended dependencies, Acceptance, Out of scope, Requirements, residual follow-ups) verbatim — only the duplicated checklist goes.
+
+5. **Verify** `gh issue view <umbrella> --json subIssues` lists exactly the children the old checklist did, and the body no longer contains a `## Sub-issues` checklist.

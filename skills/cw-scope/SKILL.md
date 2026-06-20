@@ -61,7 +61,7 @@ A sub-issue is done being written when an `cw-orchestrate` readiness sweep readi
 
 Search the target repo for `CLAUDE.md` / `AGENTS.md` (and `STRATEGY.md` / `CONCEPTS.md`). Extract the constraints that any sub-issue plan must honor — these get copied into every sub-issue's **Constraints** section so the headless planner inherits them. Typical repo-family constraints: spec-is-source-of-truth + regen step, approval-gating ADR, idempotency-flag ADR, conventional commits, squash-merge, coverage bar, docs writing voice, no-backwards-compat.
 
-If the umbrella will be a **child** of an existing parent (e.g. a milestone issue), read the parent now (`gh issue view <parent> --json body,subIssues`) and note **how it links its children** — native sub-issues vs. a body checklist of `#NNN` references. Mirror that convention (Step 6).
+If the umbrella will be a **child** of an existing parent (e.g. a milestone issue), read the parent now (`gh issue view <parent> --json body,subIssues`) and note **how it links its children** — native sub-issues vs. a body checklist of `#NNN` references. Mirror that convention when linking the umbrella *up* into the parent (Step 6). (This detection is for the up-link only; the umbrella's own sub-issues are always native — see Step 6.)
 
 ### Step 1: Frame the why (interactive)
 
@@ -107,12 +107,13 @@ This is the last human checkpoint before writing to shared state. Show the user 
 
 Then create the issues per the [creation recipe](./references/issue-templates.md):
 
-1. Create the **umbrella** first (body carries placeholder `#__SUBn__` tokens in the checklist + deps).
+1. Create the **umbrella** first; its body carries placeholder `#__SUBn__` tokens only in the dependencies section — there is no sub-issue checklist.
 2. Create each **sub-issue** (body references the umbrella as `Parent: #<umbrella>` and any decided cross-issue links via placeholder).
-3. **Backfill** the real numbers: replace `#__SUBn__` placeholders across the umbrella and any cross-referencing sub-issues, then `gh issue edit --body-file` each corrected body.
-4. **Link to the parent** (if any), mirroring the parent's convention from Step 0: add a checklist line under the appropriate section of the parent's body (`gh issue edit <parent> --body-file`), or create a native sub-issue relationship if that's what the parent uses.
+3. **Link each sub-issue to the umbrella as a native sub-issue** (`addSubIssue` GraphQL mutation, in reading order) — this *is* the parent↔child relationship.
+4. **Backfill** the real numbers: replace `#__SUBn__` placeholders in the umbrella's dependencies section and any cross-referencing sub-issue, then `gh issue edit --body-file` each corrected body.
+5. **Link the umbrella up to its own parent** (if any), mirroring the parent's convention from Step 0: a `- [ ]` line into a human milestone you don't own, or another `addSubIssue` if that parent itself uses native sub-issues.
 
-Always use `--body-file` (or a quoted heredoc) — never hand-escape backticks or `- [ ]` checklists.
+Always use `--body-file` (or a quoted heredoc) — never hand-escape backticks.
 
 ### Step 7: Handoff
 
@@ -125,7 +126,7 @@ If this initiative changed a decision recorded in durable memory (e.g. a default
 - **The output is the umbrella, not a plan.** This skill resolves *what* and *why* and structures it; *how* is the planner's job (orchestrate's Workflow). Keep implementation design out of sub-issue bodies except where a decision is itself the point (a kept abstraction seam, a spec-first ordering, a decided error string).
 - **Route-to-ready is the contract.** Every sub-issue body must be complete enough that orchestrate's sweep routes it `ready`. That is the single quality bar.
 - **Mirror orchestrate's vocabulary** — `ready` / `clarify-now` / `back-off`, readiness brief, `depends_on`, DAG — so the two skills compose without translation.
-- **Mirror the parent's linking convention.** Don't impose native sub-issues on a milestone that tracks children by body checklist (or vice versa). Detect and match.
+- **Own sub-issues are always native; mirror only the *up*-link.** A cw-skill umbrella tracks its own children as GitHub native sub-issues, full stop — no body checklist, no duplicated title list. The detect-and-match rule applies only to linking the umbrella *up* into a parent you don't own: don't impose native sub-issues on a human milestone that tracks children by body checklist (or vice versa).
 - **`gh`/`git` via Bash**, not MCP — matches orchestrate and survives headless contexts.
 - **Confirm before creating.** Issue creation is shared-state; Step 6 is the gate.
 - **Interactive by design.** No background Workflow — the value is the human-in-the-loop decision resolution that makes the downstream run hands-off.
