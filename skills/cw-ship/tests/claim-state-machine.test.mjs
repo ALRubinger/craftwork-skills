@@ -1,5 +1,5 @@
 // Regression guard for feedback #15: cw-ship left an issue carrying BOTH
-// feedback:triaging (the in-flight claim) AND feedback:needs-input (a terminal
+// cw-feedback:triaging (the in-flight claim) AND cw-feedback:needs-input (a terminal
 // state), and a run scoped to a live-claimed issue returned a bare empty result
 // indistinguishable from "nothing to do" — which tricked a manual claim reset.
 //
@@ -7,8 +7,8 @@
 // prompt builders (they are non-exported template-string builders, so — like
 // mirror.test.mjs and park-prompt.test.mjs — we assert on the extracted source):
 //   1. Claim-vs-terminal label invariant: the claim step removes the terminal
-//      label feedback:needs-input when it adds feedback:triaging, and the merge
-//      step removes feedback:triaging as the issue closes.
+//      label cw-feedback:needs-input when it adds cw-feedback:triaging, and the merge
+//      step removes cw-feedback:triaging as the issue closes.
 //   2. First-class claimed_elsewhere outcome: discovery surfaces live-claimed
 //      issues in a distinct field carried through DISCOVER_SCHEMA and the report.
 //   3. Safe stranded-claim recovery: the surfaced outcome carries reclaim_at, so
@@ -35,29 +35,29 @@ function extractConst(src, name) {
 
 // --- (1) Claim-vs-terminal label invariant ------------------------------------
 
-test('claim step removes feedback:needs-input when it adds feedback:triaging', () => {
+test('claim step removes cw-feedback:needs-input when it adds cw-feedback:triaging', () => {
   // Re-claiming an issue that still carries the parked terminal label must clear
   // it, or the issue is left carrying both the claim label and a terminal label.
   const planSrc = extractConst(workflowSrc, 'planPrompt');
-  const claimEdit = planSrc.match(/gh issue edit[^`]*--add-label feedback:triaging[^`]*/);
-  assert.ok(claimEdit, 'planPrompt must add feedback:triaging via gh issue edit');
+  const claimEdit = planSrc.match(/gh issue edit[^`]*--add-label cw-feedback:triaging[^`]*/);
+  assert.ok(claimEdit, 'planPrompt must add cw-feedback:triaging via gh issue edit');
   assert.match(
     claimEdit[0],
-    /--remove-label feedback:needs-input/,
-    'the claim edit must also remove feedback:needs-input (claim label and terminal label are mutually exclusive)',
+    /--remove-label cw-feedback:needs-input/,
+    'the claim edit must also remove cw-feedback:needs-input (claim label and terminal label are mutually exclusive)',
   );
   // The pre-existing entry-label removals must remain.
-  assert.match(claimEdit[0], /--remove-label feedback:new/);
-  assert.match(claimEdit[0], /--remove-label feedback:go/);
+  assert.match(claimEdit[0], /--remove-label cw-feedback:new/);
+  assert.match(claimEdit[0], /--remove-label cw-feedback:go/);
 });
 
-test('merge step removes feedback:triaging as the issue closes', () => {
+test('merge step removes cw-feedback:triaging as the issue closes', () => {
   // A merged/closed feedback issue must not keep the in-flight claim label.
   const mergeSrc = extractConst(workflowSrc, 'mergePrompt');
   assert.match(
     mergeSrc,
-    /gh issue edit[^`]*--remove-label feedback:triaging/,
-    'mergePrompt must remove feedback:triaging in the terminal (close) transition',
+    /gh issue edit[^`]*--remove-label cw-feedback:triaging/,
+    'mergePrompt must remove cw-feedback:triaging in the terminal (close) transition',
   );
 });
 
@@ -115,8 +115,8 @@ test('the Workflow report includes claimed_elsewhere on both return paths', () =
 test('state-machine.md documents the claim-vs-terminal label invariant', () => {
   const doc = readFileSync(join(here, '..', 'references', 'state-machine.md'), 'utf8');
   assert.match(doc, /mutually exclusive/i, 'doc must state the claim/terminal labels are mutually exclusive');
-  assert.match(doc, /feedback:triaging/, 'doc must name the claim label');
-  assert.match(doc, /feedback:needs-input/, 'doc must name the terminal label');
+  assert.match(doc, /cw-feedback:triaging/, 'doc must name the claim label');
+  assert.match(doc, /cw-feedback:needs-input/, 'doc must name the terminal label');
 });
 
 test('state-machine.md documents safe stranded-claim recovery (wait for auto-reclaim, not a manual reset)', () => {

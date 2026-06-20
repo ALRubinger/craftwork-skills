@@ -101,8 +101,8 @@ test('the timeout constant is 2 hours', () => {
 });
 
 // --- (4) The claim label and the terminal labels are mutually exclusive -------
-// Regression for feedback #15: an issue ended up carrying BOTH feedback:triaging
-// (the in-flight claim) AND feedback:needs-input (a terminal/parked state) at once.
+// Regression for feedback #15: an issue ended up carrying BOTH cw-feedback:triaging
+// (the in-flight claim) AND cw-feedback:needs-input (a terminal/parked state) at once.
 // The invariant: the claim label and any terminal-state label can never coexist.
 
 test('violatesClaimInvariant: triaging + a terminal label is a violation', () => {
@@ -114,7 +114,7 @@ test('violatesClaimInvariant: triaging + a terminal label is a violation', () =>
     );
   }
   // The exact both-labels state the operator hit.
-  assert.equal(violatesClaimInvariant(['feedback', 'feedback:triaging', 'feedback:needs-input']), true);
+  assert.equal(violatesClaimInvariant(['feedback', 'cw-feedback:triaging', 'cw-feedback:needs-input']), true);
 });
 
 test('violatesClaimInvariant: triaging alone, or a terminal label alone, is fine', () => {
@@ -124,7 +124,7 @@ test('violatesClaimInvariant: triaging alone, or a terminal label alone, is fine
     assert.equal(violatesClaimInvariant([terminal]), false);
     assert.equal(violatesClaimInvariant(['feedback', terminal]), false);
   }
-  assert.equal(violatesClaimInvariant(['feedback:new']), false);
+  assert.equal(violatesClaimInvariant(['cw-feedback:new']), false);
   assert.equal(violatesClaimInvariant([]), false);
   assert.equal(violatesClaimInvariant(null), false);
 });

@@ -2,7 +2,7 @@
 #
 # install-scheduler.sh — put the cw-sweep loop on a schedule with one command.
 #
-# Schedules cw-sweep (the out-of-band review-residual backlog drain). Detects
+# Schedules cw-sweep (the out-of-band cw-review-residual backlog drain). Detects
 # your OS and wires up the timer: launchd on macOS, a systemd user timer (or
 # cron) on Linux. Interactive by default; prompts for the repo, a local checkout
 # path, and run times, offering sensible defaults. Re-runnable and reversible.
@@ -51,8 +51,8 @@ done
 case "$SKILL" in
   cw-sweep)
     DEFAULT_TIMES="12:30,21:30"
-    SKILL_DESC="review-residual backlog drain"
-    PROMPT_LINE='PROMPT="/cw-sweep $REPO — triage the whole open review-residual backlog with autofix enabled. Run fully non-interactively: do not ask for confirmation; default any operator prompt to scope=whole-backlog, autofix=on."'
+    SKILL_DESC="cw-review-residual backlog drain"
+    PROMPT_LINE='PROMPT="/cw-sweep $REPO — triage the whole open cw-review-residual backlog with autofix enabled. Run fully non-interactively: do not ask for confirmation; default any operator prompt to scope=whole-backlog, autofix=on."'
     WRAPPER_TRAILER="" ;;
   cw-ship) die "cw-ship is not schedulable — it is an on-demand tool. Run '/cw-ship $REPO' when you want it; schedule cw-sweep with '--skill cw-sweep'." ;;
   *) die "unknown --skill '$SKILL' (only cw-sweep is schedulable)" ;;

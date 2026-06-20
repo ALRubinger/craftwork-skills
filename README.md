@@ -68,7 +68,7 @@ The autonomous skills (`cw-ship`, `cw-orchestrate`, `cw-sweep`) drive real merge
 
 `cw-ship` is on-demand — you invoke `/cw-ship <owner>/<repo>` when you want the feedback backlog drained, and `cw-orchestrate` likewise runs when you hand it an umbrella. Neither is wired to a timer.
 
-`cw-sweep` is the one loop you may *optionally* put on a schedule, to drain the `review-residual` backlog out of band; `cw-orchestrate` already triages its own residuals in-band, so it does not need one either.
+`cw-sweep` is the one loop you may *optionally* put on a schedule, to drain the `cw-review-residual` backlog out of band; `cw-orchestrate` already triages its own residuals in-band, so it does not need one either.
 
 ### Optional: schedule cw-sweep
 

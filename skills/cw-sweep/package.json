@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "User-level skill: triage the backlog of cw-orchestrate review-residual issues against shipped code — close resolved/moot, auto-apply high-confidence fixes, escalate judgment calls.",
+  "description": "User-level skill: triage the backlog of cw-orchestrate cw-review-residual issues against shipped code — close resolved/moot, auto-apply high-confidence fixes, escalate judgment calls.",
   "scripts": {
     "test": "node --test 'tests/*.test.mjs'"
   }

@@ -397,8 +397,8 @@ ${JSON.stringify(verdict.residuals, null, 2)}
 This sub-issue ${verdict.p0 ? 'HAS a P0 and is halted pending operator triage' : 'has only non-P0 findings (file-and-proceed)'}.
 
 Steps:
-1. Ensure the label exists: \`gh label create review-residual --repo ${m.repo} --color BFD4F2 --description "Deferred cw-orchestrate review findings" 2>/dev/null || true\`.
-2. Create the issue with \`gh issue create --repo ${m.repo} --label review-residual --title "review-residual: plan findings for #${issue.number}" --body-file <(...)\`.
+1. Ensure the label exists: \`gh label create cw-review-residual --repo ${m.repo} --color BFD4F2 --description "Deferred cw-orchestrate review findings" 2>/dev/null || true\`.
+2. Create the issue with \`gh issue create --repo ${m.repo} --label cw-review-residual --title "cw-review-residual: plan findings for #${issue.number}" --body-file <(...)\`.
    Body must: link the sub-issue (\`Relates to #${issue.number}\`) and the umbrella (\`Umbrella #${m.umbrella}\`); list findings severity-first (P0 at top); and be structured so a future cw-orchestrate run can adopt it as a sub-issue (clear "What" and "Acceptance" sections).
 3. Return the created issue URL.
 
@@ -445,7 +445,7 @@ Never force-resolve a conflict. Never merge over a pending or failing blocking c
 
 Return structured output: { issue, merged, pr_state, branch_gone, ci: { failing_checks, advisory_nonblocking, cancelled, pending }, cause }.`;
 
-const triagePrompt = (m, subIssue, residualUrl, prHint) => `You are triaging a "review-residual" issue against the SHIPPED code, headless, with no human. These residuals were filed against an implementation PLAN; your job is to re-judge each finding against what actually merged, then act on the cheap/clear ones and leave only genuine judgment calls for a human.
+const triagePrompt = (m, subIssue, residualUrl, prHint) => `You are triaging a "cw-review-residual" issue against the SHIPPED code, headless, with no human. These residuals were filed against an implementation PLAN; your job is to re-judge each finding against what actually merged, then act on the cheap/clear ones and leave only genuine judgment calls for a human.
 
 Repo ${m.repo}, default branch ${m.defaultBranch}.
 Residual issue: ${residualUrl}
@@ -466,7 +466,7 @@ Be conservative about closing and about high-confidence: closing a real issue or
 
 Return structured output: { residual_issue, sub_issue, shipped, closed, findings: [{title, severity, verdict, confidence, rationale, fix_hint}] }.`;
 
-const autofixPrompt = (m, tr) => `You are implementing ONLY a set of small, high-confidence cleanup fixes for review-residual #${tr.residual_issue} (sub-issue #${tr.sub_issue}) in an isolated git worktree, headless, with no human. Do NOT merge; the orchestrator merges serially after you return.
+const autofixPrompt = (m, tr) => `You are implementing ONLY a set of small, high-confidence cleanup fixes for cw-review-residual #${tr.residual_issue} (sub-issue #${tr.sub_issue}) in an isolated git worktree, headless, with no human. Do NOT merge; the orchestrator merges serially after you return.
 
 Repo ${m.repo}, base ${m.defaultBranch}. Implement EXACTLY these triaged fixes and nothing more:
 \`\`\`json

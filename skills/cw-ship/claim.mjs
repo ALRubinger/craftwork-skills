@@ -20,12 +20,12 @@ export const CLAIM_MARKER = '<!-- cw-ship/claim -->';
 export const CLAIM_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 // The in-flight claim label and the terminal-state labels are MUTUALLY EXCLUSIVE:
-// `feedback:triaging` means a run holds the issue; the terminal labels mean the run
+// `cw-feedback:triaging` means a run holds the issue; the terminal labels mean the run
 // released it (parked for input, cleared to go, or closed). An issue must never
 // carry both at once. The both-labels state the operator hit (an issue carrying
-// feedback:triaging AND feedback:needs-input) is exactly this invariant violated.
-export const CLAIM_LABEL = 'feedback:triaging';
-export const TERMINAL_LABELS = ['feedback:needs-input', 'feedback:go'];
+// cw-feedback:triaging AND cw-feedback:needs-input) is exactly this invariant violated.
+export const CLAIM_LABEL = 'cw-feedback:triaging';
+export const TERMINAL_LABELS = ['cw-feedback:needs-input', 'cw-feedback:go'];
 
 const epoch = (iso) => Date.parse(iso);
 
@@ -92,9 +92,9 @@ export function ownsClaim(myId, claims, ctx) {
 }
 
 /**
- * Is a `feedback:triaging` issue reclaimable — its prior claim crashed, so a new
+ * Is a `cw-feedback:triaging` issue reclaimable — its prior claim crashed, so a new
  * run may take it? True iff no live claim exists. Discovery includes
- * feedback:new / feedback:go always, and feedback:triaging ONLY when this is true
+ * cw-feedback:new / cw-feedback:go always, and cw-feedback:triaging ONLY when this is true
  * (an in-flight, live claim is excluded so the owning run is never disturbed).
  */
 export function isReclaimable(claims, ctx) {
@@ -106,7 +106,7 @@ export function isReclaimable(claims, ctx) {
  * reclaimable once it is past the age threshold AND the issue shows no live work,
  * so the earliest a stranded claim can be auto-reclaimed is its `created_at` plus
  * the timeout. The report surfaces this instant so the operator waits for the loop
- * to self-heal instead of manually resetting `feedback:triaging -> feedback:new`
+ * to self-heal instead of manually resetting `cw-feedback:triaging -> cw-feedback:new`
  * and racing a live orphan. Returns an ISO-8601 string.
  * @param {{created_at: string}} claim  the owning (live) claim
  * @param {number} [timeoutMs]

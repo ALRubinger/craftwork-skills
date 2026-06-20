@@ -1,6 +1,6 @@
 ---
 name: cw-ship
-description: Drain the backlog of dogfooding-feedback issues filed by /cw-feedback. Per issue, plan the change against the actual code, then either autonomously build + squash-merge a single PR (small/medium, intent clear), park genuine design forks back to the issue body for the operator (feedback:needs-input), or file a ready umbrella + hand it to cw-orchestrate (large, operator-cleared). An on-demand tool you invoke (`/cw-ship`), not a background timer. Trigger when the user wants to process, triage, or act on feedback issues.
+description: Drain the backlog of dogfooding-feedback issues filed by /cw-feedback. Per issue, plan the change against the actual code, then either autonomously build + squash-merge a single PR (small/medium, intent clear), park genuine design forks back to the issue body for the operator (cw-feedback:needs-input), or file a ready umbrella + hand it to cw-orchestrate (large, operator-cleared). An on-demand tool you invoke (`/cw-ship`), not a background timer. Trigger when the user wants to process, triage, or act on feedback issues.
 metadata:
   version: "0.1.0"
   triggers:
@@ -12,15 +12,15 @@ metadata:
 
 # cw-ship
 
-Turn captured feedback into merged changes. This is the **back-end** to [`cw-feedback`](../cw-feedback/SKILL.md): `cw-feedback` records an observation as a `feedback:new` issue; this skill plans it against the code and resolves it — autonomously when it can, with the operator only when a real decision is needed.
+Turn captured feedback into merged changes. This is the **back-end** to [`cw-feedback`](../cw-feedback/SKILL.md): `cw-feedback` records an observation as a `cw-feedback:new` issue; this skill plans it against the code and resolves it — autonomously when it can, with the operator only when a real decision is needed.
 
 The two skills share one issue and a label state machine, documented in [references/state-machine.md](./references/state-machine.md). That document is the contract; read it before changing either skill.
 
 Per in-scope issue, the loop routes to exactly one outcome:
 
 - **Build** (small/medium, intent clear after research) → branch → PR with `Closes #<issue>` → serialized squash-merge. Fully hands-off; the operator never sees it.
-- **Park** (a genuine design fork remains, or the change is umbrella-sized but not yet cleared) → write the open questions / proposed scope into the **issue body**, flip to `feedback:needs-input`, stop. The operator answers inline and adds `feedback:go`; the next run resumes it autonomously.
-- **Umbrella** (umbrella-sized AND the operator already added `feedback:go`) → file a ready umbrella + sub-issues, link and close the feedback issue, then hand execution to [`cw-orchestrate`](../cw-orchestrate/SKILL.md).
+- **Park** (a genuine design fork remains, or the change is umbrella-sized but not yet cleared) → write the open questions / proposed scope into the **issue body**, flip to `cw-feedback:needs-input`, stop. The operator answers inline and adds `cw-feedback:go`; the next run resumes it autonomously.
+- **Umbrella** (umbrella-sized AND the operator already added `cw-feedback:go`) → file a ready umbrella + sub-issues, link and close the feedback issue, then hand execution to [`cw-orchestrate`](../cw-orchestrate/SKILL.md).
 
 The design mirror is deliberate: this is to `cw-orchestrate` what a self-driving triage is to a manual one. The blocking point is the same — *once you say go, it's autonomous to merge.* The only thing that stops the loop is a decision your original feedback didn't settle, and that stop is async: it lands in the issue body for you to answer whenever.
 
@@ -47,8 +47,8 @@ Find `AGENTS.md` / `CLAUDE.md` in the target repo and note its build/test/merge 
 
 The Workflow handles the claim per issue (Plan stage):
 
-- **Claim + verify.** A run claims an issue by posting an atomic claim comment (`<!-- cw-ship/claim -->`, identified by GitHub's server-assigned comment id + `created_at`), adds `feedback:triaging`, then re-reads all claim comments and confirms it is the owner — **earliest `created_at` among non-stale claims, ties broken by lowest comment id**. The loser of a race yields (deletes its own claim, leaves the label for the owner) and never builds the issue.
-- **Discovery excludes live claims; reclaims crashed ones.** Discovery surfaces `feedback:new` / `feedback:go`, plus a `feedback:triaging` issue **only** if its claim has crashed: older than **`CLAIM_TIMEOUT` (2h)** with no open PR and no recent issue update. A live in-flight claim is never disturbed; a genuinely crashed run's issue is recoverable by age, not by a PID.
+- **Claim + verify.** A run claims an issue by posting an atomic claim comment (`<!-- cw-ship/claim -->`, identified by GitHub's server-assigned comment id + `created_at`), adds `cw-feedback:triaging`, then re-reads all claim comments and confirms it is the owner — **earliest `created_at` among non-stale claims, ties broken by lowest comment id**. The loser of a race yields (deletes its own claim, leaves the label for the owner) and never builds the issue.
+- **Discovery excludes live claims; reclaims crashed ones.** Discovery surfaces `cw-feedback:new` / `cw-feedback:go`, plus a `cw-feedback:triaging` issue **only** if its claim has crashed: older than **`CLAIM_TIMEOUT` (2h)** with no open PR and no recent issue update. A live in-flight claim is never disturbed; a genuinely crashed run's issue is recoverable by age, not by a PID.
 
 The full claim/recovery contract is the load-bearing part of this skill — see [references/state-machine.md](./references/state-machine.md). The pure resolution logic is in `claim.mjs` (tested in `tests/claim.test.mjs`); `planPrompt` in `workflow.js` implements it via gh.
 
@@ -66,14 +66,14 @@ Invoke the **Workflow** tool with `scriptPath` pointing at this skill's `workflo
 ```
 
 - `repo` is required; `defaultBranch` defaults to `main`.
-- `only` — optional array of specific feedback issue numbers; omit for the whole `feedback:new` / `feedback:go` backlog.
+- `only` — optional array of specific feedback issue numbers; omit for the whole `cw-feedback:new` / `cw-feedback:go` backlog.
 - `build` defaults to `true`; set `false` for a **dry triage** — plan + park + file umbrellas, but open no PRs. Recommended for a first run on an unfamiliar backlog, then `build: true` once you've seen what it routes.
 
 The Workflow runs headless in the background; you are notified on completion. Do not poll. It performs, in order:
 
-1. **Discover** — union of open `feedback:new` and `feedback:go` issues, plus any `feedback:triaging` issue whose claim has **crashed** (reclaim). A `feedback:triaging` issue with a still-**live** claim is not built; it is surfaced separately as `claimed_elsewhere` (Step 4) rather than silently dropped.
-2. **Plan** — one subagent per issue, in parallel: lock the issue (`feedback:triaging`), read intent, research against the code, and route `fix` / `needs-input` / `umbrella`. A `feedback:go` issue carries the operator's inline answers — the planner treats those forks as settled.
-3. **Resolve** — park the question/scope issues to the body (`feedback:needs-input`); file umbrellas for cleared umbrella-sized issues; build + serial-merge the small ones over a quiescent default branch.
+1. **Discover** — union of open `cw-feedback:new` and `cw-feedback:go` issues, plus any `cw-feedback:triaging` issue whose claim has **crashed** (reclaim). A `cw-feedback:triaging` issue with a still-**live** claim is not built; it is surfaced separately as `claimed_elsewhere` (Step 4) rather than silently dropped.
+2. **Plan** — one subagent per issue, in parallel: lock the issue (`cw-feedback:triaging`), read intent, research against the code, and route `fix` / `needs-input` / `umbrella`. A `cw-feedback:go` issue carries the operator's inline answers — the planner treats those forks as settled.
+3. **Resolve** — park the question/scope issues to the body (`cw-feedback:needs-input`); file umbrellas for cleared umbrella-sized issues; build + serial-merge the small ones over a quiescent default branch.
 
 ### Step 3: Hand filed umbrellas to cw-orchestrate
 
@@ -96,8 +96,8 @@ The Workflow returns:
 
 Render it with the action item first:
 
-- **`escalations`** — the only thing that needs you: each parked issue, why it parked (`open-questions` or `umbrella-scope`), and the questions now in its body. To unblock, run `/cw-resolve` — it walks you through every parked question and flips them to `feedback:go`. Surface these prominently; everything else was handled.
-- **`claimed_elsewhere`** — issues in scope but **held by another still-live run's claim**; this run did not touch them. Render it as its own section, distinct from `escalations` and from an empty backlog: *"#138 is held by another run, auto-reclaims at `<reclaim_at>` if that run is dead."* This is **not** an action item — do **not** manually reset `feedback:triaging -> feedback:new` to "unstick" it, which races a possibly-live run. The loop auto-reclaims a genuinely dead claim at `reclaim_at` (claim age past `CLAIM_TIMEOUT`, no open PR, no recent activity); wait for that tick. A non-empty `claimed_elsewhere` with an otherwise-empty result means "another run owns this," not "nothing to do."
+- **`escalations`** — the only thing that needs you: each parked issue, why it parked (`open-questions` or `umbrella-scope`), and the questions now in its body. To unblock, run `/cw-resolve` — it walks you through every parked question and flips them to `cw-feedback:go`. Surface these prominently; everything else was handled.
+- **`claimed_elsewhere`** — issues in scope but **held by another still-live run's claim**; this run did not touch them. Render it as its own section, distinct from `escalations` and from an empty backlog: *"#138 is held by another run, auto-reclaims at `<reclaim_at>` if that run is dead."* This is **not** an action item — do **not** manually reset `cw-feedback:triaging -> cw-feedback:new` to "unstick" it, which races a possibly-live run. The loop auto-reclaims a genuinely dead claim at `reclaim_at` (claim age past `CLAIM_TIMEOUT`, no open PR, no recent activity); wait for that tick. A non-empty `claimed_elsewhere` with an otherwise-empty result means "another run owns this," not "nothing to do."
 - Then summarize what landed: feedback issues merged (`built` where `merged: true`), umbrellas filed (now executing via orchestrate), and anything stalled (`built` where `merged: false`, with cause).
 
 ### Step 4.5: Nudge if anything parked
@@ -137,10 +137,10 @@ The merge-state gate is what makes this safe to run unattended: a worktree is re
 ## Key Notes
 
 - **The blocking point is a design fork, nothing else.** The loop only stops for a decision your feedback didn't settle. It does not stop to let you review PRs — that's the whole point. If you find yourself wanting to review the small ones, that's a signal to start with `build: false` until you trust the routing, not to add a review gate.
-- **Clearing parks is one action: run `/cw-resolve`.** It finds every `feedback:needs-input` issue, walks you through the questions (recommended answer pre-filled), writes your answers into the body, and adds `feedback:go`. A park-time push notification tells you when there's something to clear. The loop never resumes a parked issue without `feedback:go` and never re-asks an answered question.
+- **Clearing parks is one action: run `/cw-resolve`.** It finds every `cw-feedback:needs-input` issue, walks you through the questions (recommended answer pre-filled), writes your answers into the body, and adds `cw-feedback:go`. A park-time push notification tells you when there's something to clear. The loop never resumes a parked issue without `cw-feedback:go` and never re-asks an answered question.
 - **Build conservatism mirrors cw-sweep.** A subagent that hits an unsettled fork mid-build reports `needs-input: <question>` rather than guessing; that issue parks back to you instead of merging a wrong call. Auto-merging a wrong change is worse than parking.
 - **GitHub is the source of truth (Step 5).** A merged change isn't done until GitHub reflects it: the feedback issue closed (the `Closes` keyword usually does this, but a missing keyword is closed as a safety net), its description updated if the change diverged from the captured intent, and any parent/tracker/cross-reference reconciled. Standalone feedback issues make this a near no-op; issues tracked by a parent or referencing others get the same close/tick/update as cw-orchestrate's Step 7. The shared contract is [issue-reconciliation.md](../cw-orchestrate/references/issue-reconciliation.md).
 - **Self-cleaning (Step 6).** All implementation happens in `isolation: 'worktree'` build subagents, never on the default checkout. After the run the main session removes its own `wf_<runId>-*` worktrees and local branches and heals the default-branch checkout — scoped to this run's `workflowRunId` and gated on merge state — so the working copy is left clean on `<defaultBranch>` matching `origin`. This is what keeps many concurrent runs from leaving the shared checkout parked on a feature branch with a divergent local `<defaultBranch>`.
-- **Concurrency is per-issue, not per-repo (Step 1).** There is no run lock — N runs may overlap on the same repo. Each issue is serialized by an atomic claim (a `<!-- cw-ship/claim -->` comment + `feedback:triaging`), verified after acquisition (earliest non-stale claim by `created_at`, ties by lowest comment id) so a snapshot→claim race resolves to exactly one owner. No run ever steals another's claim on a liveness guess; a genuinely crashed claim (>2h, no open PR, no recent update) is reclaimable by **age**, never by PID. Every run re-discovers from live labels, so a missed/partial/crashed run self-heals next tick. Contract: [references/state-machine.md](./references/state-machine.md).
-- **Umbrella handoff uses the existing seam.** This skill files a *ready* umbrella and lets `cw-orchestrate` execute it — it does not reimplement orchestration. The operator's `feedback:go` on an umbrella-sized issue is the approval that authorizes both filing and execution.
+- **Concurrency is per-issue, not per-repo (Step 1).** There is no run lock — N runs may overlap on the same repo. Each issue is serialized by an atomic claim (a `<!-- cw-ship/claim -->` comment + `cw-feedback:triaging`), verified after acquisition (earliest non-stale claim by `created_at`, ties by lowest comment id) so a snapshot→claim race resolves to exactly one owner. No run ever steals another's claim on a liveness guess; a genuinely crashed claim (>2h, no open PR, no recent update) is reclaimable by **age**, never by PID. Every run re-discovers from live labels, so a missed/partial/crashed run self-heals next tick. Contract: [references/state-machine.md](./references/state-machine.md).
+- **Umbrella handoff uses the existing seam.** This skill files a *ready* umbrella and lets `cw-orchestrate` execute it — it does not reimplement orchestration. The operator's `cw-feedback:go` on an umbrella-sized issue is the approval that authorizes both filing and execution.
 - **Git/PR via `gh`/`git`, not MCP** — background Workflow subagents may not have interactively-authenticated MCP servers.
