@@ -1,12 +1,12 @@
 // cw-ship Workflow: discover -> plan -> resolve (build+merge | park | umbrella).
 //
 // Launched by SKILL.md with `args` = { repo, defaultBranch, only?, build }.
-// Runs headless in the background. Turns captured `feedback:new` / `feedback:go`
+// Runs headless in the background. Turns captured `cw-feedback:new` / `cw-feedback:go`
 // issues into merged changes:
 //   - small/medium, no open questions -> branch -> PR (Closes #issue) -> squash-merge
 //   - open design questions, OR umbrella-sized but not yet cleared -> PARK:
-//     write questions / proposed scope into the issue body, set feedback:needs-input
-//   - umbrella-sized AND feedback:go present -> file a ready umbrella + sub-issues;
+//     write questions / proposed scope into the issue body, set cw-feedback:needs-input
+//   - umbrella-sized AND cw-feedback:go present -> file a ready umbrella + sub-issues;
 //     SKILL.md then runs /cw-orchestrate against it to execute autonomously.
 //
 // Determinism: Workflow scripts forbid Date.now(), Math.random(), and argless
@@ -25,9 +25,9 @@ export const meta = {
   description:
     'Turn captured dogfooding feedback issues into merged changes: plan each against the code, autonomously build+merge the small ones, park the ones needing a design decision (questions synced to the issue body), and file a ready umbrella for the large ones.',
   whenToUse:
-    'On a schedule (or on demand) to drain the feedback:new / feedback:go backlog filed by the /cw-feedback skill.',
+    'On a schedule (or on demand) to drain the cw-feedback:new / cw-feedback:go backlog filed by the /cw-feedback skill.',
   phases: [
-    { title: 'Discover', detail: 'list open feedback:new / feedback:go issues not already triaging' },
+    { title: 'Discover', detail: 'list open cw-feedback:new / cw-feedback:go issues not already triaging' },
     { title: 'Plan', detail: 'per issue: claim (race-safe), research vs code, route fix | needs-input | umbrella | yielded' },
     { title: 'Resolve', detail: 'build+merge small; park questions to body; file umbrella for large' },
   ],
@@ -51,8 +51,8 @@ const DISCOVER_SCHEMA = {
         properties: {
           issue: { type: 'integer' },
           url: { type: 'string', minLength: 1 },
-          has_go: { type: 'boolean' }, // carries feedback:go (operator cleared it)
-          reclaim: { type: 'boolean' }, // surfaced from feedback:triaging with a crashed/stale claim
+          has_go: { type: 'boolean' }, // carries cw-feedback:go (operator cleared it)
+          reclaim: { type: 'boolean' }, // surfaced from cw-feedback:triaging with a crashed/stale claim
           title: { type: 'string' },
         },
       },
@@ -271,21 +271,21 @@ function mergeVerdict(m) {
 // Role prompt builders
 // ---------------------------------------------------------------------------
 
-const discoverPrompt = (a) => `You are enumerating open dogfooding-feedback issues in repo ${a.repo} so they can be triaged, using gh via Bash. These were filed by the /cw-feedback skill and follow a label state machine: feedback:new (fresh), feedback:go (the operator answered earlier open questions and cleared the issue to proceed), and feedback:triaging (a run is actively working it). MULTIPLE cw-ship runs can run on this repo at once — there is NO repo lock; the per-issue claim is what serializes work, so a live feedback:triaging issue belongs to another run and you must NOT build it. You DO surface it, but as a distinct \`claimed_elsewhere\` entry (not in \`issues\`), so a run scoped to a live-claimed target reports a legible "held by another run, auto-reclaims at <time>" outcome instead of a bare empty result. The one exception that goes into \`issues\` is a CRASHED claim, which is reclaimable (below).
+const discoverPrompt = (a) => `You are enumerating open dogfooding-feedback issues in repo ${a.repo} so they can be triaged, using gh via Bash. These were filed by the /cw-feedback skill and follow a label state machine: cw-feedback:new (fresh), cw-feedback:go (the operator answered earlier open questions and cleared the issue to proceed), and cw-feedback:triaging (a run is actively working it). MULTIPLE cw-ship runs can run on this repo at once — there is NO repo lock; the per-issue claim is what serializes work, so a live cw-feedback:triaging issue belongs to another run and you must NOT build it. You DO surface it, but as a distinct \`claimed_elsewhere\` entry (not in \`issues\`), so a run scoped to a live-claimed target reports a legible "held by another run, auto-reclaims at <time>" outcome instead of a bare empty result. The one exception that goes into \`issues\` is a CRASHED claim, which is reclaimable (below).
 
 Scope:
 ${
   Array.isArray(a.only) && a.only.length
-    ? `Only these issue numbers: ${a.only.join(', ')}. Include each that is open and carries feedback:new or feedback:go, OR is feedback:triaging with a CRASHED claim (reclaim rule below); drop the rest.`
-    : `Every OPEN issue labeled feedback:new OR feedback:go, PLUS any feedback:triaging issue whose claim has crashed (reclaim rule below).`
+    ? `Only these issue numbers: ${a.only.join(', ')}. Include each that is open and carries cw-feedback:new or cw-feedback:go, OR is cw-feedback:triaging with a CRASHED claim (reclaim rule below); drop the rest.`
+    : `Every OPEN issue labeled cw-feedback:new OR cw-feedback:go, PLUS any cw-feedback:triaging issue whose claim has crashed (reclaim rule below).`
 }
 
 Steps:
 1. List the entry states (an issue may match either):
-   \`gh issue list --repo ${a.repo} --state open --label feedback:new --json number,title,labels,url,updatedAt --limit 200\`
-   \`gh issue list --repo ${a.repo} --state open --label feedback:go --json number,title,labels,url,updatedAt --limit 200\`
-   Union them by number; for each set has_go = true iff its labels include feedback:go (these carry the operator's inline answers and are cleared to run autonomously), reclaim = false.
-2. RECLAIM PASS — recover issues stranded by a crashed run, and surface live-claimed ones as a first-class outcome. List \`gh issue list --repo ${a.repo} --state open --label feedback:triaging --json number,title,labels,url,updatedAt --limit 200\`${
+   \`gh issue list --repo ${a.repo} --state open --label cw-feedback:new --json number,title,labels,url,updatedAt --limit 200\`
+   \`gh issue list --repo ${a.repo} --state open --label cw-feedback:go --json number,title,labels,url,updatedAt --limit 200\`
+   Union them by number; for each set has_go = true iff its labels include cw-feedback:go (these carry the operator's inline answers and are cleared to run autonomously), reclaim = false.
+2. RECLAIM PASS — recover issues stranded by a crashed run, and surface live-claimed ones as a first-class outcome. List \`gh issue list --repo ${a.repo} --state open --label cw-feedback:triaging --json number,title,labels,url,updatedAt --limit 200\`${
   Array.isArray(a.only) && a.only.length
     ? `, then KEEP ONLY the issues in the --only set (${a.only.join(', ')}) — both crashed reclaims and claimed_elsewhere stay scoped to --only`
     : ''
@@ -293,29 +293,29 @@ Steps:
    a. Read its claim comments: \`gh api repos/${a.repo}/issues/<n>/comments --paginate --jq '.[] | select(.body | contains("<!-- cw-ship/claim -->")) | {id, created_at}'\`.
    b. Check for live work: is there an OPEN PR referencing #<n>? (\`gh pr list --repo ${a.repo} --state open --search "<n> in:body" --json number\`, plus a \`Closes #<n>\` scan).
    c. A claim is CRASHED iff: there is NO open PR for the issue, AND the newest claim comment's created_at is more than 2 HOURS before now, AND the issue's updatedAt is more than 2 hours before now. (Use \`date -u +%s\` for now; compare epoch seconds. A triaging issue with NO claim comment at all — e.g. an old pre-redesign run — also counts as crashed.)
-   d. If crashed → include it in \`issues\` with has_go = (labels include feedback:go), reclaim = true.
+   d. If crashed → include it in \`issues\` with has_go = (labels include cw-feedback:go), reclaim = true.
    e. If NOT crashed (a live claim — an open PR, recently updated, or a claim younger than 2h) → another run owns it RIGHT NOW. Do NOT build it and do NOT silently drop it: add it to \`claimed_elsewhere\` with last_activity = the issue's updatedAt, claim_age = the human age of the newest claim comment relative to now (e.g. "12m", "1h05m"), and reclaim_at = the newest claim comment's created_at PLUS 2 hours, in ISO-8601 (the instant the loop auto-reclaims it if the run stays dead — the operator should WAIT for that rather than manually resetting the label and racing a possibly-live run). This is the distinct, legible signal that was missing when a live-claimed --only target returned a bare empty result that looked identical to "nothing in scope".
 3. url is each issue's html url.
 
-Return structured output: { issues: [{ issue, url, has_go, reclaim, title }], claimed_elsewhere: [{ issue, url, last_activity, claim_age, reclaim_at }] }. Return empty arrays when the respective set is empty. NEVER put a live-claimed feedback:triaging issue in \`issues\` — it goes in \`claimed_elsewhere\`; only a provably-crashed claim goes in \`issues\` with reclaim = true.`;
+Return structured output: { issues: [{ issue, url, has_go, reclaim, title }], claimed_elsewhere: [{ issue, url, last_activity, claim_age, reclaim_at }] }. Return empty arrays when the respective set is empty. NEVER put a live-claimed cw-feedback:triaging issue in \`issues\` — it goes in \`claimed_elsewhere\`; only a provably-crashed claim goes in \`issues\` with reclaim = true.`;
 
 const planPrompt = (a, issue, url, hasGo, reclaim) => `You are triaging ONE dogfooding-feedback issue in repo ${a.repo} (default branch ${a.defaultBranch}) and deciding how it should be resolved. Headless, no human in the loop right now. Use gh + git via Bash; read the actual code.
 
 Issue: ${url}
-This issue is ${hasGo ? 'CLEARED (feedback:go): the operator has already answered any earlier open questions INLINE IN THE BODY. Read those answers and treat the design as settled — do NOT re-ask questions they already answered.' : 'FRESH (feedback:new): no operator answers yet.'}${reclaim ? '\nIt was RECLAIMED from a crashed run (it was feedback:triaging with a stale/crashed claim). Read the body to see whether the operator already answered earlier questions before deciding.' : ''}
+This issue is ${hasGo ? 'CLEARED (cw-feedback:go): the operator has already answered any earlier open questions INLINE IN THE BODY. Read those answers and treat the design as settled — do NOT re-ask questions they already answered.' : 'FRESH (cw-feedback:new): no operator answers yet.'}${reclaim ? '\nIt was RECLAIMED from a crashed run (it was cw-feedback:triaging with a stale/crashed claim). Read the body to see whether the operator already answered earlier questions before deciding.' : ''}
 
 STEP 0 — CLAIM THIS ISSUE (race-safe; before ANY analysis). Several cw-ship runs may process this repo at once; there is NO repo lock. The per-issue claim is the ONLY thing that prevents two runs building the same issue, so acquire it and CONFIRM YOU OWN IT before doing anything else. Never rely on a process being alive — claims are GitHub comments with server-assigned id + created_at.
   a. POST your claim and capture its id:
      \`MY_ID=$(gh api repos/${a.repo}/issues/${issue}/comments -f body='<!-- cw-ship/claim -->' --jq .id)\`
      (The comment's server-side created_at + id ARE your claim's identity — do not self-stamp a timestamp.)
-  b. Mark the issue in-flight and clear the entry AND terminal labels (idempotent — harmless if a racing run already did it; create labels if missing). feedback:triaging and the terminal labels are MUTUALLY EXCLUSIVE: an actively-worked issue is not parked, so claiming it removes feedback:needs-input too (a reclaim of a stranded park, or a feedback:go re-entry, must not leave the issue carrying both the claim label and a terminal label — that both-labels state is the invariant violation this fixes):
-     \`gh issue edit ${issue} --repo ${a.repo} --add-label feedback:triaging --remove-label feedback:new --remove-label feedback:go --remove-label feedback:needs-input\`
-     (create: \`gh label create feedback:triaging --repo ${a.repo} --color 1D76DB --description "A cw-ship run is working this issue" 2>/dev/null || true\`)
+  b. Mark the issue in-flight and clear the entry AND terminal labels (idempotent — harmless if a racing run already did it; create labels if missing). cw-feedback:triaging and the terminal labels are MUTUALLY EXCLUSIVE: an actively-worked issue is not parked, so claiming it removes cw-feedback:needs-input too (a reclaim of a stranded park, or a cw-feedback:go re-entry, must not leave the issue carrying both the claim label and a terminal label — that both-labels state is the invariant violation this fixes):
+     \`gh issue edit ${issue} --repo ${a.repo} --add-label cw-feedback:triaging --remove-label cw-feedback:new --remove-label cw-feedback:go --remove-label cw-feedback:needs-input\`
+     (create: \`gh label create cw-feedback:triaging --repo ${a.repo} --color 1D76DB --description "A cw-ship run is working this issue" 2>/dev/null || true\`)
   c. VERIFY OWNERSHIP — re-read EVERY claim comment, then apply the rule:
      \`gh api repos/${a.repo}/issues/${issue}/comments --paginate --jq '.[] | select(.body | contains("<!-- cw-ship/claim -->")) | {id, created_at}'\`
      Also determine, for staleness: is there an OPEN PR referencing #${issue}? and the issue's updatedAt. A claim is STALE iff it is >2h old AND there is no open PR for the issue AND the issue's updatedAt is >2h ago. The OWNER is the claim with the EARLIEST created_at among NON-stale claims; ties broken by the LOWEST numeric comment id.
   d. If \$MY_ID is the owner → you hold the issue; continue to STEP 1.
-     If \$MY_ID is NOT the owner → another run claimed first. YIELD: delete your own claim comment (\`gh api -X DELETE repos/${a.repo}/issues/comments/\$MY_ID\`), do NOT remove feedback:triaging (the owner needs it), and return { issue: ${issue}, route: "yielded", claim_comment_id: null, summary: "yielded: <owner claim id> owns this issue" } WITHOUT analyzing or building anything. This is the whole point — never build an issue you do not own.
+     If \$MY_ID is NOT the owner → another run claimed first. YIELD: delete your own claim comment (\`gh api -X DELETE repos/${a.repo}/issues/comments/\$MY_ID\`), do NOT remove cw-feedback:triaging (the owner needs it), and return { issue: ${issue}, route: "yielded", claim_comment_id: null, summary: "yielded: <owner claim id> owns this issue" } WITHOUT analyzing or building anything. This is the whole point — never build an issue you do not own.
   (A reclaimed issue's prior claim is stale, so your fresh claim is the only non-stale one and you become the owner.)
 
 STEP 1 — UNDERSTAND THE INTENT:
@@ -326,8 +326,8 @@ Locate the surface in the repo. Confirm what currently happens vs. what the oper
 
 STEP 3 — ROUTE. Choose exactly one:
 - "fix" — the change is a SINGLE squash-mergeable PR and you understand it well enough to implement it correctly with no further operator input. Default to this whenever the work is bounded and the intent is clear (after research). This is the common, desired case: just fix the thing.
-- "needs-input" — a genuine DESIGN FORK remains that only the operator should decide (a real trade-off, an exact user-facing string, a scope boundary, a behavior choice). Put each such fork in open_questions as a crisp question, ideally with a recommended answer. Use this ONLY for forks a competent implementer shouldn't decide alone — not for things you can reasonably settle yourself. If this issue is already feedback:go, the operator answered the prior questions; only route needs-input again if a NEW fork surfaced that their answers didn't cover.
-- "umbrella" — the change is genuinely multi-PR (several independently mergeable units). Provide umbrella_scope { title, why, sub_issues:[{title, what}] } at one-PR granularity per sub-issue. (If the issue is NOT yet feedback:go, this scope will be parked into the body for the operator to approve; if it IS feedback:go, it will be filed and orchestrated.)
+- "needs-input" — a genuine DESIGN FORK remains that only the operator should decide (a real trade-off, an exact user-facing string, a scope boundary, a behavior choice). Put each such fork in open_questions as a crisp question, ideally with a recommended answer. Use this ONLY for forks a competent implementer shouldn't decide alone — not for things you can reasonably settle yourself. If this issue is already cw-feedback:go, the operator answered the prior questions; only route needs-input again if a NEW fork surfaced that their answers didn't cover.
+- "umbrella" — the change is genuinely multi-PR (several independently mergeable units). Provide umbrella_scope { title, why, sub_issues:[{title, what}] } at one-PR granularity per sub-issue. (If the issue is NOT yet cw-feedback:go, this scope will be parked into the body for the operator to approve; if it IS cw-feedback:go, it will be filed and orchestrated.)
 
 Be conservative: prefer "fix" for bounded work, reserve "needs-input" for real forks, reserve "umbrella" for genuinely large initiatives. Set open_questions=[] and umbrella_scope=null when not applicable.
 
@@ -348,14 +348,14 @@ ${
   reason === 'umbrella-scope'
     ? `   "## Proposed umbrella scope" followed by the title + why + a checklist of the proposed sub-issues from this scope:
 ${JSON.stringify(p.plan.umbrella_scope, null, 2)}
-   End with: "_To proceed: confirm or edit this scope above, then add the \\\`feedback:go\\\` label. The loop will file the umbrella and hand it to cw-orchestrate._"`
+   End with: "_To proceed: confirm or edit this scope above, then add the \\\`cw-feedback:go\\\` label. The loop will file the umbrella and hand it to cw-orchestrate._"`
     : `   "## Open questions" followed by a numbered list of these questions, each on its own line:
 ${JSON.stringify(p.plan.open_questions || [], null, 2)}
-   End with: "_To proceed: answer each question inline above, then add the \\\`feedback:go\\\` label._"`
+   End with: "_To proceed: answer each question inline above, then add the \\\`cw-feedback:go\\\` label._"`
 }
 3. GUARD before you push — detect a contaminated read instead of compounding it. Re-fetch this issue's current title (\`gh issue view ${p.issue} --repo ${a.repo} --json title -q .title\`) and confirm it equals the contents of title-${p.issue}.md. Then confirm body-${p.issue}.md still leads with THIS issue's body — its leading content must match the body you fetched for #${p.issue} (i.e. it begins with #${p.issue}'s original Observation / body text, with ONLY your appended block added at the end and no other issue's content). If either check fails — the title differs, the body no longer matches #${p.issue}, or a foreign Observation or a duplicate appended block is present — ABORT the write: do NOT run \`gh issue edit\`, and return { issue: ${p.issue}, parked: false, reason: "<which check failed>" } where the reason names the specific guard failure (e.g. "guard-abort: title mismatch", "guard-abort: body contaminated", "guard-abort: duplicate block") rather than the park reason, so the cause is legible. Only when both checks pass, write back: \`gh issue edit ${p.issue} --repo ${a.repo} --body-file body-${p.issue}.md\` (never hand-escape backticks or checklists).
-4. Flip labels to the parked state: \`gh issue edit ${p.issue} --repo ${a.repo} --add-label feedback:needs-input --remove-label feedback:triaging\` (create feedback:needs-input first if missing: color D93F0B). Do NOT add feedback:go — that is the operator's action.
-5. RELEASE the claim: parking hands the issue back to the operator, so delete this run's claim comment${p.plan.claim_comment_id ? ` (\`gh api -X DELETE repos/${a.repo}/issues/comments/${p.plan.claim_comment_id} 2>/dev/null || true\`)` : ' if one exists'}. Leaving it would make the next run (after the operator adds feedback:go) see a stale live claim and yield.
+4. Flip labels to the parked state: \`gh issue edit ${p.issue} --repo ${a.repo} --add-label cw-feedback:needs-input --remove-label cw-feedback:triaging\` (create cw-feedback:needs-input first if missing: color D93F0B). Do NOT add cw-feedback:go — that is the operator's action.
+5. RELEASE the claim: parking hands the issue back to the operator, so delete this run's claim comment${p.plan.claim_comment_id ? ` (\`gh api -X DELETE repos/${a.repo}/issues/comments/${p.plan.claim_comment_id} 2>/dev/null || true\`)` : ' if one exists'}. Leaving it would make the next run (after the operator adds cw-feedback:go) see a stale live claim and yield.
 
 Return structured output: { issue: ${p.issue}, parked: true, reason: "${reason}" } once the body is written, labels flipped, and the claim released (or parked: false with the mismatch cause if the guard aborted the write — in that case do NOT release the claim, the issue stays held).`;
 
@@ -389,16 +389,16 @@ Steps:
    c. ADVISORY checks — coverage thresholds (\`codecov/patch\`, \`codecov/project\`) and preview/deploy checks — are soft gates per repo policy. A non-\`success\` advisory check does NOT block; record its name in \`ci.advisory_nonblocking\` and proceed. When unsure whether a check is blocking, treat it as BLOCKING; consult the repo's CLAUDE.md / AGENTS.md if it names required checks.
    d. A run \`cancelled\` by GitHub Actions \`concurrency: cancel-in-progress\` (a later commit landed while you waited) is NOT a failure — re-run \`--watch\` once to pick up the superseding run's conclusions before deciding. If checks never conclude within ~30 minutes, report \`merged:false\`, cause "pre-merge CI did not conclude (timeout)".
 4. Only when every blocking check is green: \`gh pr merge ${built.pr_number} --repo ${a.repo} --squash --admin --delete-branch\`. If gh reports the PR is out of date / not mergeable because the base moved (another run merged first), that is EXPECTED under concurrency — re-fetch ${a.defaultBranch}, re-run the merge-tree check, rebase onto fresh ${a.defaultBranch} if needed, RE-RUN the pre-merge CI gate (step 3) on the rebased head, and retry the merge ONCE. Still failing → report merged:false, cause "base moved; needs rebase".
-5. Verify and complete the terminal transition: PR state is MERGED; branch is gone (\`git ls-remote --heads origin ${built.branch}\` empty — if not, \`git push origin --delete ${built.branch}\`). The merge closes feedback #${built.issue} via the Closes line; confirm it is closed. Closing is a TERMINAL transition, so remove the in-flight claim label in the same step — feedback:triaging and a closed/terminal state are mutually exclusive and a merged feedback issue must not keep the in-flight claim label: \`gh issue edit ${built.issue} --repo ${a.repo} --remove-label feedback:triaging 2>/dev/null || true\`${claimCommentId ? `, then RELEASE this run's claim (\`gh api -X DELETE repos/${a.repo}/issues/comments/${claimCommentId} 2>/dev/null || true\`) — the issue is done` : ''}.
+5. Verify and complete the terminal transition: PR state is MERGED; branch is gone (\`git ls-remote --heads origin ${built.branch}\` empty — if not, \`git push origin --delete ${built.branch}\`). The merge closes feedback #${built.issue} via the Closes line; confirm it is closed. Closing is a TERMINAL transition, so remove the in-flight claim label in the same step — cw-feedback:triaging and a closed/terminal state are mutually exclusive and a merged feedback issue must not keep the in-flight claim label: \`gh issue edit ${built.issue} --repo ${a.repo} --remove-label cw-feedback:triaging 2>/dev/null || true\`${claimCommentId ? `, then RELEASE this run's claim (\`gh api -X DELETE repos/${a.repo}/issues/comments/${claimCommentId} 2>/dev/null || true\`) — the issue is done` : ''}.
 6. POST-MERGE sanity (regression detector only — the landing already passed the CI gate in step 3, so this rarely fires). Inspect the merge commit's checks (\`gh pr checks ${built.pr_number} --repo ${a.repo}\` / \`gh run list\`):
    - A run \`cancelled\` by \`concurrency: cancel-in-progress\` (a later commit landed on \`${a.defaultBranch}\` — another merge or an unrelated bot PR such as Renovate) is NOT a failure. Set \`ci.cancelled: true\`; confirm on the \`${a.defaultBranch}\` TIP and only record a genuinely-failed check in \`failing_checks\`.
    - Only a real \`failure\` conclusion on the merge commit (not advisory, not cancelled) goes in \`ci.failing_checks\`; it rides along as a post-merge regression WARNING on the merged issue, NOT an un-merge (the PR has already landed).
 
-Merged = PR MERGED (the pre-merge gate already proved blocking CI green). Post-merge CI is advisory and never un-merges a landed PR. Never force-resolve a conflict; never merge over a pending or failing blocking check. If the merge does NOT land, leave feedback:triaging and the claim in place — the issue stays held (its open PR is a stalled-but-live claim, not a crashed one).
+Merged = PR MERGED (the pre-merge gate already proved blocking CI green). Post-merge CI is advisory and never un-merges a landed PR. Never force-resolve a conflict; never merge over a pending or failing blocking check. If the merge does NOT land, leave cw-feedback:triaging and the claim in place — the issue stays held (its open PR is a stalled-but-live claim, not a crashed one).
 
 Return structured output: { issue, merged, pr_state, branch_gone, ci: { failing_checks, advisory_nonblocking, cancelled, pending }, cause }.`;
 
-const umbrellaPrompt = (a, p) => `You are filing a ready-to-orchestrate GitHub umbrella from an operator-APPROVED scope, using gh via Bash. Repo ${a.repo}. The operator added feedback:go, so the scope below is settled — file it; do not re-ask.
+const umbrellaPrompt = (a, p) => `You are filing a ready-to-orchestrate GitHub umbrella from an operator-APPROVED scope, using gh via Bash. Repo ${a.repo}. The operator added cw-feedback:go, so the scope below is settled — file it; do not re-ask.
 
 Source feedback issue: ${p.url} (#${p.issue}). Approved scope (the operator may have edited the body; if the issue body's "## Proposed umbrella scope" differs from this, the BODY wins — re-read it first):
 ${JSON.stringify(p.plan.umbrella_scope, null, 2)}
@@ -407,9 +407,9 @@ Steps:
 1. Re-read the feedback body for the operator's final scope edits: \`gh issue view ${p.issue} --repo ${a.repo} --json body\`.
 2. File the umbrella issue. Body: a human "Why" (from the scope's why + the feedback), then a checklist of sub-issues. Mirror this repo family's umbrella conventions (see any recent umbrella issue for shape). Label it as the repo's umbrellas are labeled if such a label exists.
 3. File each sub-issue at one-PR granularity with a body the cw-orchestrate readiness sweep can route "ready": What this is, Constraints (from AGENTS.md/CLAUDE.md), Acceptance (incl. regression tests). Backfill the umbrella checklist with the real sub-issue numbers (\`--body-file\`, never hand-escape).
-4. Link back: add "Spawned from feedback #${p.issue}" to the umbrella body, and CLOSE the feedback issue with a comment "Tracked by umbrella #<n>; execution handed to cw-orchestrate." Remove its feedback:triaging label, and RELEASE this run's claim${p.plan.claim_comment_id ? ` (\`gh api -X DELETE repos/${a.repo}/issues/comments/${p.plan.claim_comment_id} 2>/dev/null || true\`)` : ''} — the issue is handed off, not held.
+4. Link back: add "Spawned from feedback #${p.issue}" to the umbrella body, and CLOSE the feedback issue with a comment "Tracked by umbrella #<n>; execution handed to cw-orchestrate." Remove its cw-feedback:triaging label, and RELEASE this run's claim${p.plan.claim_comment_id ? ` (\`gh api -X DELETE repos/${a.repo}/issues/comments/${p.plan.claim_comment_id} 2>/dev/null || true\`)` : ''} — the issue is handed off, not held.
 
-Return structured output: { feedback_issue: ${p.issue}, umbrella, umbrella_url, sub_issues, cause }. Set umbrella=null with a cause if you could not file it (in that case leave feedback:triaging and the claim in place — the issue is still held for a retry).`;
+Return structured output: { feedback_issue: ${p.issue}, umbrella, umbrella_url, sub_issues, cause }. Set umbrella=null with a cause if you could not file it (in that case leave cw-feedback:triaging and the claim in place — the issue is still held for a retry).`;
 
 // ---------------------------------------------------------------------------
 // Orchestration body

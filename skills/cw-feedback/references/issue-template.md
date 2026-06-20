@@ -1,6 +1,6 @@
 # Feedback issue template
 
-The capture skill files exactly one issue per observation, with both `feedback` and `feedback:new` labels. The body is intentionally small — it records *intent*, and the triage loop researches the *how*.
+The capture skill files exactly one issue per observation, with both `cw-feedback` and `cw-feedback:new` labels. The body is intentionally small — it records *intent*, and the triage loop researches the *how*.
 
 ## Title
 
@@ -34,7 +34,7 @@ have one, but say it's a hint.>
 
 <!-- cw-ship appends an "## Open questions" block below this line when it
      needs your input. Run /cw-resolve to answer (or answer inline and add the
-     `feedback:go` label yourself) to resume autonomous execution. -->
+     `cw-feedback:go` label yourself) to resume autonomous execution. -->
 ```
 
 ## Rules

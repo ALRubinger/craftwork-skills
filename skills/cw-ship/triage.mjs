@@ -8,7 +8,7 @@
 //   plan.route          ∈ 'fix' | 'needs-input' | 'umbrella'
 //   plan.open_questions   array of question strings (may be empty)
 //   plan.umbrella_scope   proposed scope object | null (only when route umbrella)
-// hasGo is true when the issue carries the feedback:go label (operator cleared it).
+// hasGo is true when the issue carries the cw-feedback:go label (operator cleared it).
 
 // Decide what the loop does with one planned issue:
 //   'build'    — small/medium, no open questions → branch, PR, merge autonomously

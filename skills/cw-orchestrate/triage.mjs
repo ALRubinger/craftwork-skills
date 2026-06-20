@@ -1,4 +1,4 @@
-// Canonical, pure, unit-tested triage decision logic for review-residual issues.
+// Canonical, pure, unit-tested triage decision logic for cw-review-residual issues.
 //
 // `workflow.js` inlines a byte-for-byte mirror of these functions because a
 // Claude Code Workflow script (a) auto-runs its body on evaluation and (b) has
@@ -10,9 +10,9 @@
 // this file; this one is the upstream origin. Pure: no Date.now(),
 // Math.random(), or argless `new Date()` (all forbidden in Workflow scripts).
 //
-// A triage RESULT for one review-residual issue has the shape:
+// A triage RESULT for one cw-review-residual issue has the shape:
 //   {
-//     residual_issue: number,   // the review-residual issue (e.g. 1000)
+//     residual_issue: number,   // the cw-review-residual issue (e.g. 1000)
 //     sub_issue:      number,   // the feature sub-issue it tracks (e.g. 986)
 //     shipped:        boolean,  // is the sub-issue's code merged? false => can't triage yet
 //     closed:         boolean,  // did the triage subagent close the residual

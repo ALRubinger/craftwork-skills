@@ -1,6 +1,6 @@
 ---
 name: cw-sweep
-description: Triage the backlog of cw-orchestrate `review-residual` issues. Re-judge each filed finding against the code that actually shipped, close the ones already resolved or moot, auto-apply the small high-confidence fixes, and surface only genuine judgment calls. Trigger when the user wants to clear, triage, or act on review-residual issues out of band from an umbrella run.
+description: Triage the backlog of cw-orchestrate `cw-review-residual` issues. Re-judge each filed finding against the code that actually shipped, close the ones already resolved or moot, auto-apply the small high-confidence fixes, and surface only genuine judgment calls. Trigger when the user wants to clear, triage, or act on cw-review-residual issues out of band from an umbrella run.
 metadata:
   version: "0.1.0"
   triggers:
@@ -12,9 +12,9 @@ metadata:
 
 # cw-sweep
 
-Clear the standing backlog of `review-residual` issues that `cw-orchestrate` files.
+Clear the standing backlog of `cw-review-residual` issues that `cw-orchestrate` files.
 
-Each `review-residual` issue is a consolidated set of plan-review findings the umbrella run deferred. Filed against a **plan**, many are already moot by the time the feature ships, others are cheap correct fixes, and only a few are genuine decisions. This skill re-judges every finding against the **shipped code**, then:
+Each `cw-review-residual` issue is a consolidated set of plan-review findings the umbrella run deferred. Filed against a **plan**, many are already moot by the time the feature ships, others are cheap correct fixes, and only a few are genuine decisions. This skill re-judges every finding against the **shipped code**, then:
 
 - **Closes** residuals whose findings are all already-resolved or moot.
 - **Auto-applies** the small, high-confidence fixes (one PR per residual, serial-merged).
@@ -25,7 +25,7 @@ Each `review-residual` issue is a consolidated set of plan-review findings the u
 
 ## When to Use
 
-When the user wants to triage, clear, or act on `review-residual` issues — e.g. "triage the residual issues", "clear the review-residual backlog", "act on the residuals for umbrella #989". Do **not** use it to triage residuals from a run currently in flight (cw-orchestrate handles those itself).
+When the user wants to triage, clear, or act on `cw-review-residual` issues — e.g. "triage the residual issues", "clear the cw-review-residual backlog", "act on the residuals for umbrella #989". Do **not** use it to triage residuals from a run currently in flight (cw-orchestrate handles those itself).
 
 ## Prerequisites
 
@@ -44,7 +44,7 @@ Find `AGENTS.md` / `CLAUDE.md` in the target repo and note build/test/merge conv
 
 Decide which residuals are in scope and confirm with the operator:
 
-- **Whole backlog** — every open `review-residual` issue in the repo.
+- **Whole backlog** — every open `cw-review-residual` issue in the repo.
 - **One umbrella** — residuals whose body references `Umbrella #<n>` (pass `umbrella`).
 - **Explicit set** — specific residual issue numbers (pass `only: [n, ...]`).
 
@@ -70,10 +70,10 @@ Invoke the **Workflow** tool with `scriptPath` pointing at this skill's `workflo
 
 The Workflow runs headless in the background; you are notified on completion. Do not poll. It performs, in order:
 
-1. **Discover** — list in-scope open `review-residual` issues; map each to its tracked sub-issue (from the `Relates to #<n>` line) and read its labels to classify a `human_state`: `fresh`, `needs-input` (parked, awaiting the operator — skipped this run), or `go` (operator answered — triaged in consume mode).
+1. **Discover** — list in-scope open `cw-review-residual` issues; map each to its tracked sub-issue (from the `Relates to #<n>` line) and read its labels to classify a `human_state`: `fresh`, `needs-input` (parked, awaiting the operator — skipped this run), or `go` (operator answered — triaged in consume mode).
 2. **Triage** — one subagent per `fresh`/`go` residual, in parallel: re-judge each finding against the shipped diff + current files, post a triage comment, and close the residual if nothing actionable remains. A residual whose sub-issue hasn't shipped is left open and marked deferred. For `go` residuals it runs in **consume mode**: it reads the operator's `**Answer:**` lines under the `## Decision needed` block and re-classifies accordingly (accept → resolved; "do X" → a high-confidence fix).
 3. **Autofix** (if enabled) — over a now-quiescent default branch, each residual with a high-confidence `FIX_NOW` finding gets one PR (implementing only those fixes) serial-merged through the standard merge-safety contract. The PR `Closes` the residual when its fixes resolve everything actionable, else `Relates to` it.
-4. **Park** — each shipped residual with a remaining judgment call (`DECISION` or low-confidence `FIX_NOW`) gets a `## Decision needed` block written into its body — the question, your recommended answer, and the alternatives — and the `review-residual:needs-input` label. This is the durable record the operator drains (see Step 3 below and `/cw-resolve`).
+4. **Park** — each shipped residual with a remaining judgment call (`DECISION` or low-confidence `FIX_NOW`) gets a `## Decision needed` block written into its body — the question, your recommended answer, and the alternatives — and the `cw-review-residual:needs-input` label. This is the durable record the operator drains (see Step 3 below and `/cw-resolve`).
 
 ### Step 3: Surface the report
 
@@ -94,10 +94,10 @@ The Workflow returns:
 **If you are in an interactive session and `escalations` is non-empty, ask the decisions immediately — do not dump them as prose.** This is the same recommendation-first flow as `/cw-resolve` (the Workflow already parked them durably, so this just drains them now):
 
 1. For each escalation, in `residual_issue` order, restate the residual in one line for context (e.g. "_#1010 (feature #984): is the banner meant to repeat each run?_").
-2. Ask via `AskUserQuestion`, one decision per turn: the `decision_question` as the prompt, `recommended_answer` as the first option marked "(Recommended)", then `alt_options`. Always include a **skip** path — if the operator isn't ready, leave the residual `review-residual:needs-input` and move on.
-3. Write the answer back into the residual body (the `## Decision needed` block) as an `**Answer:** <decision>` line, then advance the label: an accept/no-change answer → close the residual; a "do X" answer → `--add-label review-residual:go --remove-label review-residual:needs-input` so the next sweep applies it. Use `gh issue view … --json body -q .body > body.md` → edit → `gh issue edit … --body-file body.md` (never hand-escape). After clearing a batch, offer to re-run `/cw-sweep` on the `:go` set to apply the answered fixes now.
+2. Ask via `AskUserQuestion`, one decision per turn: the `decision_question` as the prompt, `recommended_answer` as the first option marked "(Recommended)", then `alt_options`. Always include a **skip** path — if the operator isn't ready, leave the residual `cw-review-residual:needs-input` and move on.
+3. Write the answer back into the residual body (the `## Decision needed` block) as an `**Answer:** <decision>` line, then advance the label: an accept/no-change answer → close the residual; a "do X" answer → `--add-label cw-review-residual:go --remove-label cw-review-residual:needs-input` so the next sweep applies it. Use `gh issue view … --json body -q .body > body.md` → edit → `gh issue edit … --body-file body.md` (never hand-escape). After clearing a batch, offer to re-run `/cw-sweep` on the `:go` set to apply the answered fixes now.
 
-In a **headless/scheduled run** (you were told to run non-interactively) do **not** answer decisions yourself — the Park step already recorded them as `review-residual:needs-input` for the operator to drain later via `/cw-resolve`. Just report.
+In a **headless/scheduled run** (you were told to run non-interactively) do **not** answer decisions yourself — the Park step already recorded them as `cw-review-residual:needs-input` for the operator to drain later via `/cw-resolve`. Just report.
 
 Then surface the rest for the operator:
 
@@ -138,7 +138,7 @@ The merge-state gate is what makes this safe to run unattended: a worktree is re
 - **Triage is against shipped code, never the plan.** A residual filed against a plan is only meaningful once re-checked against the merged diff — half are moot because the implementation already fixed or diverged from the flagged thing. This is why the skill needs the sub-issue's PR to have merged; unshipped residuals defer.
 - **The confidence gate is the safety boundary.** Only `FIX_NOW` findings the triage subagent marks high-confidence (correct, safe, in-scope) are auto-applied and merged unsupervised. Anything ambiguous becomes an escalation. Auto-merging a wrong fix is worse than leaving a residual open.
 - **Self-cleaning (Step 5).** All fixes are implemented in `isolation: 'worktree'` autofix subagents, never on the default checkout. After the run the main session removes its own `wf_<runId>-*` worktrees and local branches and heals the default-branch checkout — scoped to this run's `workflowRunId` and gated on merge state — so the working copy is left clean on `<defaultBranch>` matching `origin`, even with many concurrent runs.
-- **Decisions follow a park/resolve/go loop, mirroring the feedback pipeline.** A genuine judgment call is parked onto its residual (`review-residual:needs-input` + a `## Decision needed` block carrying the recommended answer). The operator answers — inline here in an interactive run, or later via `/cw-resolve` — which sets `review-residual:go`; the next sweep consumes the answer (close, or apply the specified fix). The same `decision_question` / `recommended_answer` / `alt_options` fields drive both the inline `AskUserQuestion` and the parked block, so the recommendation is authored once. Headless runs never answer decisions themselves — they only park.
+- **Decisions follow a park/resolve/go loop, mirroring the feedback pipeline.** A genuine judgment call is parked onto its residual (`cw-review-residual:needs-input` + a `## Decision needed` block carrying the recommended answer). The operator answers — inline here in an interactive run, or later via `/cw-resolve` — which sets `cw-review-residual:go`; the next sweep consumes the answer (close, or apply the specified fix). The same `decision_question` / `recommended_answer` / `alt_options` fields drive both the inline `AskUserQuestion` and the parked block, so the recommendation is authored once. Headless runs never answer decisions themselves — they only park.
 - **Closing is reversible; merging is not.** The skill closes resolved/moot residuals freely (a human can reopen) but is strict about what code it lands. Mismatched aggressiveness on purpose.
 - **Idempotent-ish.** Re-running over the same scope re-triages still-open residuals; already-closed ones drop out of discovery. Safe to run repeatedly as features ship and deferrals become triageable.
 - **Concurrency model (no per-repo lock).** Like cw-orchestrate and unlike the old cw-ship, cw-sweep has no coarse run lock and no per-residual claim — concurrency safety comes from the work being **idempotent + guarded**, not from mutual exclusion. Re-judging a residual and closing the moot/resolved ones is safe to repeat; the autofix path runs a **freshness pre-check** (re-confirms the residual is still open and the fix isn't already on the default branch before building — see [residual-triage.md](../cw-orchestrate/references/residual-triage.md)), so two overlapping sweeps **converge** rather than double-build. The merge step rebases/retries on a moved base, and worktree cleanup is run-scoped by `workflowRunId`. A per-residual claim like cw-ship's ([state-machine.md](../cw-ship/references/state-machine.md)) could add stronger guarantees but isn't needed given the freshness guard.

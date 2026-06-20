@@ -1,6 +1,6 @@
 ---
 name: cw-feedback
-description: Capture plain-English dogfooding feedback about the product you're building while you're using it, enrich it lightly (classify, grab repo + command context, one clarifying question only if truly ambiguous), and file ONE GitHub issue labeled feedback:new that /cw-ship's scheduled loop later turns into a merged change. Trigger when the user wants to record an observation, gripe, or change request about the product they're building ("I don't like X", "feedback:", "log this", "file feedback", "Y should change").
+description: Capture plain-English dogfooding feedback about the product you're building while you're using it, enrich it lightly (classify, grab repo + command context, one clarifying question only if truly ambiguous), and file ONE GitHub issue labeled cw-feedback:new that /cw-ship's scheduled loop later turns into a merged change. Trigger when the user wants to record an observation, gripe, or change request about the product they're building ("I don't like X", "feedback:", "log this", "file feedback", "Y should change").
 metadata:
   version: "0.1.0"
   triggers:
@@ -74,11 +74,11 @@ You are recording intent for a planner to research, not preflighting every decis
 The handoff to cw-ship runs on a label state machine (see [cw-ship/references/state-machine.md](../cw-ship/references/state-machine.md)). Ensure the base + entry labels exist in the target repo, creating any that are missing:
 
 ```sh
-gh label create feedback        --repo <repo> --color 0E8A16 --description "Dogfooding feedback (feedback->cw-ship pipeline)" 2>/dev/null || true
-gh label create feedback:new    --repo <repo> --color FBCA04 --description "Captured feedback awaiting triage" 2>/dev/null || true
+gh label create cw-feedback        --repo <repo> --color 0E8A16 --description "Dogfooding feedback (feedback->cw-ship pipeline)" 2>/dev/null || true
+gh label create cw-feedback:new    --repo <repo> --color FBCA04 --description "Captured feedback awaiting triage" 2>/dev/null || true
 ```
 
-(The triage loop owns creating its downstream states — `feedback:triaging`, `feedback:needs-input`, `feedback:go`. Creating them here too is harmless; the two label sets are documented in the state-machine reference.)
+(The triage loop owns creating its downstream states — `cw-feedback:triaging`, `cw-feedback:needs-input`, `cw-feedback:go`. Creating them here too is harmless; the two label sets are documented in the state-machine reference.)
 
 ### Step 6: File one issue (then confirm)
 
@@ -89,7 +89,7 @@ File it with both labels, using `--body-file` (never hand-escape backticks or ch
 ```sh
 gh issue create --repo <repo> \
   --title "<kind>: <imperative summary>" \
-  --label feedback --label feedback:new \
+  --label cw-feedback --label cw-feedback:new \
   --body-file <body.md>
 ```
 
@@ -101,4 +101,4 @@ Report back the issue URL and a one-line summary of what you captured, and tell 
 - **Intent, not prescription.** Record *what's wrong and what you want*, not *how to fix it*. Naming a fix is fine as a hint, but the planner re-derives the real change against the code — over-specifying here can send it down your guessed path instead of the right one.
 - **Cheap by design.** No planning, no scoping, no PR. If you find yourself asking more than one question, stop — that depth belongs in the triage loop's preflight, which syncs back through the issue body.
 - **`gh`/`git` via Bash**, not MCP — matches the downstream headless loop.
-- **The label is the contract.** `feedback:new` is what the loop's discovery query looks for. Don't file with a different label and expect pickup.
+- **The label is the contract.** `cw-feedback:new` is what the loop's discovery query looks for. Don't file with a different label and expect pickup.

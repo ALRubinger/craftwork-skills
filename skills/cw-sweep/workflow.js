@@ -2,7 +2,7 @@
 //
 // Launched by SKILL.md with `args` = { repo, defaultBranch, umbrella?, only?,
 // autofix }. Runs headless in the background. Clears the backlog of open
-// `review-residual` issues that cw-orchestrate files: re-judges each
+// `cw-review-residual` issues that cw-orchestrate files: re-judges each
 // finding against the SHIPPED code, closes what is resolved/moot, optionally
 // auto-applies high-confidence fixes, and surfaces only genuine judgment calls.
 //
@@ -16,11 +16,11 @@
 export const meta = {
   name: 'cw-sweep',
   description:
-    'Clear the backlog of open review-residual issues: re-judge each finding against the shipped code, close what is resolved or moot, auto-apply high-confidence fixes, and escalate only genuine judgment calls.',
+    'Clear the backlog of open cw-review-residual issues: re-judge each finding against the shipped code, close what is resolved or moot, auto-apply high-confidence fixes, and escalate only genuine judgment calls.',
   whenToUse:
-    'To triage the standing backlog of cw-orchestrate review-residual issues (or a specific subset), out of band from an umbrella run.',
+    'To triage the standing backlog of cw-orchestrate cw-review-residual issues (or a specific subset), out of band from an umbrella run.',
   phases: [
-    { title: 'Discover', detail: 'list open review-residual issues and map each to its sub-issue' },
+    { title: 'Discover', detail: 'list open cw-review-residual issues and map each to its sub-issue' },
     { title: 'Triage', detail: 'per residual: classify vs shipped code; close resolved/moot' },
     { title: 'Autofix', detail: 'high-confidence FIX_NOW findings -> PR -> serial merge (opt-in)' },
     { title: 'Park', detail: 'write a "## Decision needed" block + needs-input label for residuals with judgment calls' },
@@ -219,44 +219,44 @@ function deferredResiduals(results) {
 // Role prompt builders (mirror references/residual-triage.md & merge-safety.md)
 // ---------------------------------------------------------------------------
 
-const discoverPrompt = (a) => `You are enumerating open "review-residual" issues in repo ${a.repo} so they can be triaged, using gh via Bash. These issues were filed by cw-orchestrate's plan-review stage; each one tracks a feature sub-issue and links it with a "Relates to #<n>" line in its body.
+const discoverPrompt = (a) => `You are enumerating open "cw-review-residual" issues in repo ${a.repo} so they can be triaged, using gh via Bash. These issues were filed by cw-orchestrate's plan-review stage; each one tracks a feature sub-issue and links it with a "Relates to #<n>" line in its body.
 
 Scope:
 ${
   Array.isArray(a.only) && a.only.length
-    ? `Only these residual issue numbers: ${a.only.join(', ')}. Verify each actually carries the "review-residual" label; drop any that do not.`
+    ? `Only these residual issue numbers: ${a.only.join(', ')}. Verify each actually carries the "cw-review-residual" label; drop any that do not.`
     : a.umbrella
-      ? `All OPEN issues labeled "review-residual" whose body references umbrella #${a.umbrella} (an "Umbrella #${a.umbrella}" line).`
-      : `All OPEN issues labeled "review-residual".`
+      ? `All OPEN issues labeled "cw-review-residual" whose body references umbrella #${a.umbrella} (an "Umbrella #${a.umbrella}" line).`
+      : `All OPEN issues labeled "cw-review-residual".`
 }
 
 Steps:
-1. List candidates: \`gh issue list --repo ${a.repo} --state open --label review-residual --limit 200 --json number,title,body,labels\`${Array.isArray(a.only) && a.only.length ? ` (or fetch the named numbers directly with \`gh issue view\` and confirm the label).` : '.'}
-2. For each in-scope residual, resolve the underlying FEATURE issue it ultimately concerns. Residual titles are always "review-residual: plan findings for #<n>", and the body carries a matching "Relates to #<n>" line.
+1. List candidates: \`gh issue list --repo ${a.repo} --state open --label cw-review-residual --limit 200 --json number,title,body,labels\`${Array.isArray(a.only) && a.only.length ? ` (or fetch the named numbers directly with \`gh issue view\` and confirm the label).` : '.'}
+2. For each in-scope residual, resolve the underlying FEATURE issue it ultimately concerns. Residual titles are always "cw-review-residual: plan findings for #<n>", and the body carries a matching "Relates to #<n>" line.
    a. The immediate target is that #<n>.
-   b. If the immediate target is ITSELF a review-residual issue (its title begins "review-residual:" or it carries the review-residual label), this is a NESTED adoption: a later cw-orchestrate run adopted an older residual as a sub-issue. Read that issue's title "plan findings for #<m>" and follow to #<m>. Repeat until you reach an issue that is NOT a review-residual issue — that terminal issue is the underlying feature. Use \`gh issue view <n> --repo ${a.repo} --json title,labels\` to test each hop.
+   b. If the immediate target is ITSELF a cw-review-residual issue (its title begins "cw-review-residual:" or it carries the cw-review-residual label), this is a NESTED adoption: a later cw-orchestrate run adopted an older residual as a sub-issue. Read that issue's title "plan findings for #<m>" and follow to #<m>. Repeat until you reach an issue that is NOT a cw-review-residual issue — that terminal issue is the underlying feature. Use \`gh issue view <n> --repo ${a.repo} --json title,labels\` to test each hop.
    c. Record the full chain of issue numbers walked, the immediate target as relates_to, and the terminal feature as sub_issue. (If the immediate target is already a feature, chain is just [feature] and relates_to == sub_issue.)
    Guard against loops: stop after a reasonable number of hops and, if you cannot reach a non-residual feature, set sub_issue to the last issue in the chain.
 3. Parse the umbrella number (the "Umbrella #<n>" line, or null if absent). Build residual_url as https://github.com/${a.repo}/issues/<number>.
 4. Classify each residual's human_state from its labels (the park/resolve/go loop):
-   - "go"          if it carries the "review-residual:go" label (the operator answered the parked decisions inline; it will be triaged in consume mode).
-   - "needs-input" else if it carries "review-residual:needs-input" (parked, still awaiting the operator; it will be skipped this run, not re-triaged).
+   - "go"          if it carries the "cw-review-residual:go" label (the operator answered the parked decisions inline; it will be triaged in consume mode).
+   - "needs-input" else if it carries "cw-review-residual:needs-input" (parked, still awaiting the operator; it will be skipped this run, not re-triaged).
    - "fresh"       otherwise.
 
 Return ONLY in-scope residuals. Return structured output: { residuals: [{ residual_issue, residual_url, sub_issue, relates_to, chain, umbrella, human_state }] }.`;
 
-const triagePrompt = (a, subIssue, residualUrl, chain, mode) => `You are triaging a "review-residual" issue against the SHIPPED code on ${a.defaultBranch}, headless, with no human. These residuals were filed against an implementation PLAN; re-judge each finding against what actually landed, then act on the cheap/clear ones and leave only genuine judgment calls for a human.
+const triagePrompt = (a, subIssue, residualUrl, chain, mode) => `You are triaging a "cw-review-residual" issue against the SHIPPED code on ${a.defaultBranch}, headless, with no human. These residuals were filed against an implementation PLAN; re-judge each finding against what actually landed, then act on the cheap/clear ones and leave only genuine judgment calls for a human.
 
 Repo ${a.repo}, default branch ${a.defaultBranch}.
 Residual issue: ${residualUrl}
 Underlying feature: #${subIssue}${Array.isArray(chain) && chain.length > 1 ? `\nResolved through a nested residual chain: ${chain.map((n) => '#' + n).join(' -> ')} — the residual tracks an earlier residual that ultimately concerns the feature. Triage the findings against the feature's code, using the intermediate residuals/PRs only as context.` : ''}
 ${
   mode === 'consume'
-    ? `\nCONSUME MODE: this residual was parked for a decision and the operator has now ANSWERED (label review-residual:go). Its body has a "## Decision needed" block whose entries each carry an "**Answer:** <decision>" line. Treat each answer as the SETTLED decision and re-classify the finding it answers:
+    ? `\nCONSUME MODE: this residual was parked for a decision and the operator has now ANSWERED (label cw-review-residual:go). Its body has a "## Decision needed" block whose entries each carry an "**Answer:** <decision>" line. Treat each answer as the SETTLED decision and re-classify the finding it answers:
 - answer accepts current behavior / "leave as-is" / "no change" => RESOLVED (or MOOT if the finding no longer applies).
 - answer specifies a change ("do X", "use Y") => FIX_NOW, confidence "high" (the operator authorized this exact change), fix_hint = the operator's specified change.
 - answer is genuinely ambiguous or raises a NEW fork => keep DECISION (it will re-park) and emit fresh decision_question/recommended_answer/alt_options.
-Findings with NO operator answer are re-judged normally (below). Leave the review-residual:go label in place — closing the residual (now or via the autofix PR) clears it, a re-park flips it to needs-input, and if it stays open for autofix a re-run re-consumes the same answers idempotently. Do not remove it by hand.\n`
+Findings with NO operator answer are re-judged normally (below). Leave the cw-review-residual:go label in place — closing the residual (now or via the autofix PR) clears it, a re-park flips it to needs-input, and if it stays open for autofix a re-run re-consumes the same answers idempotently. Do not remove it by hand.\n`
     : ''
 }
 Steps:
@@ -288,7 +288,7 @@ const decisionFindings = (tr) =>
     (f) => f.verdict === 'DECISION' || (f.verdict === 'FIX_NOW' && f.confidence !== 'high'),
   );
 
-const parkResidualPrompt = (a, tr, residualUrl) => `You are PARKING one review-residual issue for the operator's input, using gh via Bash. Repo ${a.repo}. Residual: ${residualUrl} (#${tr.residual_issue}, feature #${tr.sub_issue}). Its findings against the shipped code include genuine judgment calls only the operator should make.
+const parkResidualPrompt = (a, tr, residualUrl) => `You are PARKING one cw-review-residual issue for the operator's input, using gh via Bash. Repo ${a.repo}. Residual: ${residualUrl} (#${tr.residual_issue}, feature #${tr.sub_issue}). Its findings against the shipped code include genuine judgment calls only the operator should make.
 
 Steps:
 1. Fetch the current body: \`gh issue view ${tr.residual_issue} --repo ${a.repo} --json body -q .body > body.md\`.
@@ -304,13 +304,13 @@ ${JSON.stringify(
   2,
 )}
 \`\`\`
-   End the block with: "_To proceed: answer each decision inline above, then add the \\\`review-residual:go\\\` label (or run /cw-resolve). The next cw-sweep run applies your answers._"
+   End the block with: "_To proceed: answer each decision inline above, then add the \\\`cw-review-residual:go\\\` label (or run /cw-resolve). The next cw-sweep run applies your answers._"
    Use \`gh issue edit ${tr.residual_issue} --repo ${a.repo} --body-file body.md\` (never hand-escape backticks or checklists).
-3. Flip labels to the parked state: \`gh issue edit ${tr.residual_issue} --repo ${a.repo} --add-label review-residual:needs-input --remove-label review-residual:go\` (create review-residual:needs-input first if missing: color D93F0B). Do NOT add review-residual:go — that is the operator's action.
+3. Flip labels to the parked state: \`gh issue edit ${tr.residual_issue} --repo ${a.repo} --add-label cw-review-residual:needs-input --remove-label cw-review-residual:go\` (create cw-review-residual:needs-input first if missing: color D93F0B). Do NOT add cw-review-residual:go — that is the operator's action.
 
 Return structured output: { issue: ${tr.residual_issue}, parked: true }.`;
 
-const autofixPrompt = (a, tr) => `You are implementing ONLY a set of small, high-confidence cleanup fixes for review-residual #${tr.residual_issue} (sub-issue #${tr.sub_issue}) in an isolated git worktree, headless, with no human. Do NOT merge; the orchestrator merges serially after you return.
+const autofixPrompt = (a, tr) => `You are implementing ONLY a set of small, high-confidence cleanup fixes for cw-review-residual #${tr.residual_issue} (sub-issue #${tr.sub_issue}) in an isolated git worktree, headless, with no human. Do NOT merge; the orchestrator merges serially after you return.
 
 Repo ${a.repo}, base ${a.defaultBranch}. Implement EXACTLY these triaged fixes and nothing more:
 \`\`\`json
@@ -374,7 +374,7 @@ const discovered = await agent(discoverPrompt(cfg), {
   schema: DISCOVER_SCHEMA,
 });
 const residuals = (discovered && discovered.residuals) || [];
-log(`Discovered ${residuals.length} open review-residual issue(s).`);
+log(`Discovered ${residuals.length} open cw-review-residual issue(s).`);
 if (residuals.length === 0) {
   return { repo: cfg.repo, triaged: [], autofixed: [], parked: [], escalations: [], awaiting_input: [], deferred_residuals: [] };
 }

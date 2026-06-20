@@ -1,4 +1,4 @@
-// Canonical, pure, unit-tested triage decision logic for review-residual issues.
+// Canonical, pure, unit-tested triage decision logic for cw-review-residual issues.
 //
 // Self-contained copy for the cw-sweep skill. The upstream origin is
 // cw-orchestrate/triage.mjs; the shared classifiers (closeDisposition,
@@ -12,9 +12,9 @@
 // function here (a Workflow script cannot import at runtime); mirror.test.mjs
 // guards that drift. Pure: no Date.now(), Math.random(), or argless `new Date()`.
 //
-// A triage RESULT for one review-residual issue has the shape:
+// A triage RESULT for one cw-review-residual issue has the shape:
 //   {
-//     residual_issue: number,   // the review-residual issue (e.g. 1000)
+//     residual_issue: number,   // the cw-review-residual issue (e.g. 1000)
 //     sub_issue:      number,   // the feature sub-issue it tracks (e.g. 986)
 //     shipped:        boolean,  // is the sub-issue's code merged? false => can't triage yet
 //     closed:         boolean,  // did the triage subagent close the residual
@@ -125,7 +125,7 @@ export function escalations(results) {
  * Residual-issue numbers to PARK for operator input on a headless run: SHIPPED
  * residuals carrying at least one human-needed finding (DECISION or low-conf
  * FIX_NOW), ascending. The headless analog of autofixCandidates() — the set that
- * gets a "## Decision needed" block + the review-residual:needs-input label.
+ * gets a "## Decision needed" block + the cw-review-residual:needs-input label.
  * Unshipped residuals defer (deferredResiduals) rather than park.
  * @param {Array} results
  * @returns {number[]}

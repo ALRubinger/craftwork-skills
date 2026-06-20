@@ -12,8 +12,8 @@ The recipes use `claude -p` (Claude Code's headless invocation); for another run
 
 Two guards in `SKILL.md` and the Workflow make unattended runs safe — and there is **no run lock**, so overlapping scheduled runs (or a manual run during a scheduled one) are fine, not a hazard:
 
-1. **Per-issue atomic claim** (`<!-- cw-ship/claim -->` + `feedback:triaging`) — a run builds an issue only if it owns the claim (earliest non-stale `created_at`, ties by lowest comment id), verified *after* claiming so a snapshot→claim race resolves to one owner. A crashed claim is reclaimed by age (2h, no open PR, no recent update), never by a PID. See [state-machine.md](./state-machine.md) for the full contract. (The old per-repo lockfile was removed: a `$$`-in-a-file lock is meaningless when every Bash call is a fresh ephemeral shell.)
-2. **Idempotency** — every run re-discovers from live labels + claims (`feedback:new` / `feedback:go` / crashed `feedback:triaging`), so a missed or partial run self-heals on the next tick. Re-running is the intended mode, which is what makes the retry loop in the wrapper safe — and, because two runs can't both own an issue, a re-invocation that overlaps the prior one cannot double-build.
+1. **Per-issue atomic claim** (`<!-- cw-ship/claim -->` + `cw-feedback:triaging`) — a run builds an issue only if it owns the claim (earliest non-stale `created_at`, ties by lowest comment id), verified *after* claiming so a snapshot→claim race resolves to one owner. A crashed claim is reclaimed by age (2h, no open PR, no recent update), never by a PID. See [state-machine.md](./state-machine.md) for the full contract. (The old per-repo lockfile was removed: a `$$`-in-a-file lock is meaningless when every Bash call is a fresh ephemeral shell.)
+2. **Idempotency** — every run re-discovers from live labels + claims (`cw-feedback:new` / `cw-feedback:go` / crashed `cw-feedback:triaging`), so a missed or partial run self-heals on the next tick. Re-running is the intended mode, which is what makes the retry loop in the wrapper safe — and, because two runs can't both own an issue, a re-invocation that overlaps the prior one cannot double-build.
 
 ## Manual setup
 
@@ -149,8 +149,8 @@ schtasks /delete /tn "cw-ship-am" /f  :: remove
 
 - **Run once (test):** the per-OS test command above (`launchctl start` / `systemctl --user start` / run the wrapper directly).
 - **Pause/remove:** remove the unit by hand (`launchctl unload …plist`, `systemctl --user disable --now cw-ship.timer`, or delete the cron block). The installer does not manage a `cw-ship` schedule, so there is nothing for it to uninstall here. (To stop running it entirely, just stop invoking `/cw-ship` — that is the on-demand default.)
-- **Stuck `feedback:triaging`:** no manual action needed — a crashed claim is reclaimed automatically once it ages past `CLAIM_TIMEOUT` (2h) with no open PR and no recent update. (There is no lockfile to clear; the old `~/.cache/cw-ship/*.lock` scheme was removed.)
-- **Stuck `feedback:triaging`:** if a crashed run left an issue labeled `feedback:triaging`, remove that label by hand; the next run re-picks it from `feedback:new` / `feedback:go`.
+- **Stuck `cw-feedback:triaging`:** no manual action needed — a crashed claim is reclaimed automatically once it ages past `CLAIM_TIMEOUT` (2h) with no open PR and no recent update. (There is no lockfile to clear; the old `~/.cache/cw-ship/*.lock` scheme was removed.)
+- **Stuck `cw-feedback:triaging`:** if a crashed run left an issue labeled `cw-feedback:triaging`, remove that label by hand; the next run re-picks it from `cw-feedback:new` / `cw-feedback:go`.
 
 ## Without a local machine
 

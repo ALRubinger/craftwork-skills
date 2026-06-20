@@ -119,12 +119,12 @@ A note on schemas: `agent(prompt, { schema })` forces the subagent to call a `St
 ```bash
 gh issue create \
   --repo "$repo" \
-  --title "review-residual: plan findings for #$issue" \
-  --label "review-residual" \
+  --title "cw-review-residual: plan findings for #$issue" \
+  --label "cw-review-residual" \
   --body-file <(printf '%s\n' "$body")   # structured body; see below
 ```
 
-- Create the `review-residual` label on first use if absent (`gh label create review-residual --color BFD4F2 --description "Deferred cw-orchestrate plan/diff review findings"`).
+- Create the `cw-review-residual` label on first use if absent (`gh label create cw-review-residual --color BFD4F2 --description "Deferred cw-orchestrate plan/diff review findings"`).
 - Body links **both** the sub-issue (`Relates to #$issue`) and the umbrella (`Umbrella #$umbrella`), and lists findings severity-first so P0 surfaces at the top of triage.
 - Structure the body so a **future** `cw-orchestrate` run can adopt the residual as a sub-issue: a clear title, a "What" section, and an "Acceptance" section (R11, R20).
 

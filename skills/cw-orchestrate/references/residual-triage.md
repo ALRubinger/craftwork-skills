@@ -1,6 +1,6 @@
 # Residual Triage & Autofix
 
-The plan-review stage (Stage 1.5) files a `review-residual` issue per sub-issue: every non-trivially-auto-fixable finding it raised against the **plan**. Left alone these accumulate as a backlog of technical follow-ups. The triage + autofix roles clear them by re-judging each finding against the code that **actually shipped**, then acting on the cheap/clear ones and surfacing only genuine judgment calls.
+The plan-review stage (Stage 1.5) files a `cw-review-residual` issue per sub-issue: every non-trivially-auto-fixable finding it raised against the **plan**. Left alone these accumulate as a backlog of technical follow-ups. The triage + autofix roles clear them by re-judging each finding against the code that **actually shipped**, then acting on the cheap/clear ones and surfacing only genuine judgment calls.
 
 This file is the **canonical, human-readable** statement of the two roles. `workflow.js` inlines string constants that mirror these (a Workflow script has no filesystem access at runtime). The pure decision logic lives in `triage.mjs` (tested) and is mirrored into `workflow.js`; `mirror.test.mjs` guards the drift.
 
@@ -112,8 +112,8 @@ A residual is marked `shipped:false` and deferred **only** when the feature is g
 
 The standalone `cw-sweep` skill routes escalations to the operator through the same label state machine the feedback pipeline uses (`cw-ship`'s `state-machine.md`), so judgment calls do not evaporate into an unread headless log:
 
-- **Park.** After triage + autofix, each `parkCandidates` residual gets a `## Decision needed` block written into its body (one entry per judgment call: the `decision_question`, the `recommended_answer`, the `alt_options`) and the `review-residual:needs-input` label. Unshipped residuals defer instead of parking.
-- **Resolve.** The operator answers — inline during an interactive `cw-sweep` run (it asks each decision via `AskUserQuestion`, recommendation first), or later via `/cw-resolve`, which drains `review-residual:needs-input` the same way it drains `feedback:needs-input`. An `**Answer:**` line goes under each decision and the label flips to `review-residual:go` (or the residual is closed if the answer is "accept / no change").
+- **Park.** After triage + autofix, each `parkCandidates` residual gets a `## Decision needed` block written into its body (one entry per judgment call: the `decision_question`, the `recommended_answer`, the `alt_options`) and the `cw-review-residual:needs-input` label. Unshipped residuals defer instead of parking.
+- **Resolve.** The operator answers — inline during an interactive `cw-sweep` run (it asks each decision via `AskUserQuestion`, recommendation first), or later via `/cw-resolve`, which drains `cw-review-residual:needs-input` the same way it drains `cw-feedback:needs-input`. An `**Answer:**` line goes under each decision and the label flips to `cw-review-residual:go` (or the residual is closed if the answer is "accept / no change").
 - **Go / consume.** Discovery classifies each residual's `human_state` from its labels: `needs-input` residuals are **skipped** (still awaiting the operator), `go` residuals are triaged in **consume mode** — the subagent reads the operator's answers and re-classifies (accept → `RESOLVED`; "do X" → high-confidence `FIX_NOW`), so the normal autofix/close machinery applies the decision.
 
 The same `decision_question` / `recommended_answer` / `alt_options` fields feed both the inline `AskUserQuestion` and the parked block, so the recommendation is authored once. The in-run cw-orchestrate path surfaces escalations in the umbrella report rather than parking each one.
