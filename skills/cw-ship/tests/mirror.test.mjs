@@ -1,7 +1,7 @@
-// Drift guard: workflow.js inlines a mirror of triage.mjs's pure functions
-// (a Workflow script cannot import sibling modules at runtime). This test fails
-// if the two copies diverge, so the tested canonical and the running copy stay
-// in lockstep.
+// Drift guard: workflow.js inlines a mirror of triage.mjs's and merge.mjs's pure
+// functions (a Workflow script cannot import sibling modules at runtime). This
+// test fails if the two copies diverge, so the tested canonical and the running
+// copy stay in lockstep.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -38,6 +38,7 @@ const normalize = (s) =>
     .trim();
 
 const triageSrc = readFileSync(join(root, 'triage.mjs'), 'utf8');
+const mergeSrc = readFileSync(join(root, 'merge.mjs'), 'utf8');
 const workflowSrc = readFileSync(join(root, 'workflow.js'), 'utf8');
 
 for (const fn of ['dispositionFor', 'parkReason', 'actionQueues', 'escalations']) {
@@ -45,5 +46,13 @@ for (const fn of ['dispositionFor', 'parkReason', 'actionQueues', 'escalations']
     const canonical = normalize(extractFunction(triageSrc, fn));
     const mirror = normalize(extractFunction(workflowSrc, fn));
     assert.equal(mirror, canonical, `${fn} has drifted between triage.mjs and workflow.js`);
+  });
+}
+
+for (const fn of ['classifyPostMergeCI', 'postMergeCIStalls', 'mergeVerdict']) {
+  test(`workflow.js mirror of ${fn} matches merge.mjs`, () => {
+    const canonical = normalize(extractFunction(mergeSrc, fn));
+    const mirror = normalize(extractFunction(workflowSrc, fn));
+    assert.equal(mirror, canonical, `${fn} has drifted between merge.mjs and workflow.js`);
   });
 }

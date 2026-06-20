@@ -12,10 +12,13 @@
 // Determinism: Workflow scripts forbid Date.now(), Math.random(), and argless
 // `new Date()`. This skill mints no timestamps and writes no scratch.
 //
-// The routing logic below is a verbatim MIRROR of triage.mjs (a Workflow script
-// cannot import sibling modules at runtime). tests/mirror.test.mjs fails if they
-// drift. The label state machine is references/state-machine.md; the merge
-// contract mirrors cw-orchestrate's merge-safety.md.
+// The routing logic below is a verbatim MIRROR of triage.mjs, and the merge-CI
+// classification a verbatim MIRROR of merge.mjs (a Workflow script cannot import
+// sibling modules at runtime). tests/mirror.test.mjs fails if either drifts. The
+// label state machine is references/state-machine.md. The merge contract — a
+// pre-merge wait-for-green CI gate (blocking vs. advisory checks), then merge,
+// with post-merge CI as an advisory regression detector — mirrors
+// cw-orchestrate's merge-safety.md and is shared via merge.mjs / merge-ci.mjs.
 
 export const meta = {
   name: 'cw-ship',
@@ -147,7 +150,16 @@ const MERGE_SCHEMA = {
     merged: { type: 'boolean' },
     pr_state: { type: ['string', 'null'] },
     branch_gone: { type: ['boolean', 'null'] },
-    ci_green: { type: ['boolean', 'null'] },
+    ci: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      properties: {
+        failing_checks: { type: 'array', items: { type: 'string' } },
+        advisory_nonblocking: { type: 'array', items: { type: 'string' } },
+        cancelled: { type: 'boolean' },
+        pending: { type: 'boolean' },
+      },
+    },
     cause: { type: ['string', 'null'] },
   },
 };
@@ -212,6 +224,47 @@ function escalations(planned) {
       questions: (p.plan && p.plan.open_questions) || [],
     }))
     .sort((a, b) => a.issue - b.issue);
+}
+
+// ---------------------------------------------------------------------------
+// Pure merge-CI classification — MIRROR of merge.mjs (kept in sync; tested
+// there). A Workflow script cannot import sibling modules at runtime, so the
+// canonical implementation is duplicated here verbatim. A cancelled run (GitHub
+// Actions concurrency cancel-in-progress, fired when a later commit lands on the
+// default branch) is NOT a failure; the PR has already merged either way. Do not
+// edit one copy without the other.
+// ---------------------------------------------------------------------------
+
+function classifyPostMergeCI(ci) {
+  const c = ci || {};
+  const failing = (c.failing_checks || []).filter(Boolean);
+  if (failing.length > 0) return 'failed';
+  if (c.pending) return 'pending';
+  if (c.cancelled) return 'superseded';
+  return 'green';
+}
+
+function postMergeCIStalls(ci) {
+  return classifyPostMergeCI(ci) === 'failed';
+}
+
+// MIRROR of merge.mjs mergeVerdict (tested there). A merged PR is never reported
+// as not-merged; a post-merge regression rides along as a warning. Replaces the
+// old inline `!!(m.merged && m.ci_green !== false)`.
+function mergeVerdict(m) {
+  const r = m || {};
+  if (r.merged) {
+    return {
+      state: 'merged',
+      postMergeWarning: postMergeCIStalls(r.ci) ? r.cause || 'post-merge CI regression' : null,
+      cause: null,
+    };
+  }
+  return {
+    state: 'stalled',
+    postMergeWarning: null,
+    cause: r.cause || 'merge did not land (pre-merge conflict or failing CI gate)',
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -330,13 +383,20 @@ PR #${built.pr_number} (${built.pr_url}), branch \`${built.branch}\`, feedback #
 Steps:
 1. \`git fetch origin ${a.defaultBranch} ${built.branch}\`.
 2. PRE-MERGE CONFLICT CHECK against FRESH ${a.defaultBranch}: \`git merge-tree --write-tree --name-only origin/${a.defaultBranch} origin/${built.branch}\`. If it reports a conflict, do NOT merge: try ONE clean rebase of the branch onto fresh ${a.defaultBranch} and push with --force-with-lease; if it still conflicts or needs human judgment, report merged:false, cause "pre-merge conflict against ${a.defaultBranch}".
-3. If clean: \`gh pr merge ${built.pr_number} --repo ${a.repo} --squash --admin --delete-branch\`. If gh reports the PR is out of date / not mergeable because the base moved (another run merged first), that is EXPECTED under concurrency — re-fetch ${a.defaultBranch}, re-run the merge-tree check, rebase onto fresh ${a.defaultBranch} if needed, and retry the merge ONCE. Still failing → report merged:false, cause "base moved; needs rebase".
-4. Verify and complete the terminal transition: PR state is MERGED; branch is gone (\`git ls-remote --heads origin ${built.branch}\` empty — if not, \`git push origin --delete ${built.branch}\`). The merge closes feedback #${built.issue} via the Closes line; confirm it is closed. Closing is a TERMINAL transition, so remove the in-flight claim label in the same step — feedback:triaging and a closed/terminal state are mutually exclusive and a merged feedback issue must not keep the in-flight claim label: \`gh issue edit ${built.issue} --repo ${a.repo} --remove-label feedback:triaging 2>/dev/null || true\`${claimCommentId ? `, then RELEASE this run's claim (\`gh api -X DELETE repos/${a.repo}/issues/comments/${claimCommentId} 2>/dev/null || true\`) — the issue is done` : ''}.
-5. Post-merge CI: check ${a.defaultBranch} CI for the merge commit is green.
+3. PRE-MERGE CI GATE — wait for green, THEN merge. NEVER merge over a pending or failing blocking check; \`--admin\` bypasses required-review, NOT in-progress or failing validation.
+   a. Block until every check concludes: \`gh pr checks ${built.pr_number} --repo ${a.repo} --watch --interval 30\` (no \`queued\`/\`in_progress\` may remain). Then read final conclusions: \`gh pr checks ${built.pr_number} --repo ${a.repo}\`.
+   b. BLOCKING checks — build, unit/integration tests, lint, vet, type/check, smoke builds, security scans — MUST every one conclude \`success\`. If ANY concluded \`failure\`/\`timed_out\`/\`startup_failure\`/\`action_required\`, do NOT merge: report \`merged:false\`, put their names in \`ci.failing_checks\`, set cause "pre-merge CI failed: <checks>". Do NOT fix it here (that is the build step's job) — the issue stays held with the failing check named.
+   c. ADVISORY checks — coverage thresholds (\`codecov/patch\`, \`codecov/project\`) and preview/deploy checks — are soft gates per repo policy. A non-\`success\` advisory check does NOT block; record its name in \`ci.advisory_nonblocking\` and proceed. When unsure whether a check is blocking, treat it as BLOCKING; consult the repo's CLAUDE.md / AGENTS.md if it names required checks.
+   d. A run \`cancelled\` by GitHub Actions \`concurrency: cancel-in-progress\` (a later commit landed while you waited) is NOT a failure — re-run \`--watch\` once to pick up the superseding run's conclusions before deciding. If checks never conclude within ~30 minutes, report \`merged:false\`, cause "pre-merge CI did not conclude (timeout)".
+4. Only when every blocking check is green: \`gh pr merge ${built.pr_number} --repo ${a.repo} --squash --admin --delete-branch\`. If gh reports the PR is out of date / not mergeable because the base moved (another run merged first), that is EXPECTED under concurrency — re-fetch ${a.defaultBranch}, re-run the merge-tree check, rebase onto fresh ${a.defaultBranch} if needed, RE-RUN the pre-merge CI gate (step 3) on the rebased head, and retry the merge ONCE. Still failing → report merged:false, cause "base moved; needs rebase".
+5. Verify and complete the terminal transition: PR state is MERGED; branch is gone (\`git ls-remote --heads origin ${built.branch}\` empty — if not, \`git push origin --delete ${built.branch}\`). The merge closes feedback #${built.issue} via the Closes line; confirm it is closed. Closing is a TERMINAL transition, so remove the in-flight claim label in the same step — feedback:triaging and a closed/terminal state are mutually exclusive and a merged feedback issue must not keep the in-flight claim label: \`gh issue edit ${built.issue} --repo ${a.repo} --remove-label feedback:triaging 2>/dev/null || true\`${claimCommentId ? `, then RELEASE this run's claim (\`gh api -X DELETE repos/${a.repo}/issues/comments/${claimCommentId} 2>/dev/null || true\`) — the issue is done` : ''}.
+6. POST-MERGE sanity (regression detector only — the landing already passed the CI gate in step 3, so this rarely fires). Inspect the merge commit's checks (\`gh pr checks ${built.pr_number} --repo ${a.repo}\` / \`gh run list\`):
+   - A run \`cancelled\` by \`concurrency: cancel-in-progress\` (a later commit landed on \`${a.defaultBranch}\` — another merge or an unrelated bot PR such as Renovate) is NOT a failure. Set \`ci.cancelled: true\`; confirm on the \`${a.defaultBranch}\` TIP and only record a genuinely-failed check in \`failing_checks\`.
+   - Only a real \`failure\` conclusion on the merge commit (not advisory, not cancelled) goes in \`ci.failing_checks\`; it rides along as a post-merge regression WARNING on the merged issue, NOT an un-merge (the PR has already landed).
 
-Green = PR MERGED AND post-merge ${a.defaultBranch} CI green. Anything else is not green; report the cause. Never force-resolve a conflict. If the merge does NOT land, leave feedback:triaging and the claim in place — the issue stays held (its open PR is a stalled-but-live claim, not a crashed one).
+Merged = PR MERGED (the pre-merge gate already proved blocking CI green). Post-merge CI is advisory and never un-merges a landed PR. Never force-resolve a conflict; never merge over a pending or failing blocking check. If the merge does NOT land, leave feedback:triaging and the claim in place — the issue stays held (its open PR is a stalled-but-live claim, not a crashed one).
 
-Return structured output: { issue, merged, pr_state, branch_gone, ci_green, cause }.`;
+Return structured output: { issue, merged, pr_state, branch_gone, ci: { failing_checks, advisory_nonblocking, cancelled, pending }, cause }.`;
 
 const umbrellaPrompt = (a, p) => `You are filing a ready-to-orchestrate GitHub umbrella from an operator-APPROVED scope, using gh via Bash. Repo ${a.repo}. The operator added feedback:go, so the scope below is settled — file it; do not re-ask.
 
@@ -464,9 +524,17 @@ if (runBuild) {
       phase: 'Resolve',
       schema: MERGE_SCHEMA,
     });
-    const merged = !!(m.merged && m.ci_green !== false);
-    built.push({ issue: p.issue, pr: b.pr_url || null, merged, cause: merged ? null : m.cause || 'merge not green' });
-    log(`Build #${p.issue}: ${merged ? 'merged' : 'stalled — ' + (m.cause || 'not green')}`);
+    // The PR lands only when the pre-merge CI gate passed. A merged PR is never
+    // reported as not-merged: a genuine post-merge regression rides along as a
+    // warning (the code is already on the default branch), it does not un-merge.
+    const v = mergeVerdict(m);
+    const merged = v.state === 'merged';
+    built.push({ issue: p.issue, pr: b.pr_url || null, merged, cause: merged ? v.postMergeWarning : v.cause });
+    log(
+      `Build #${p.issue}: ${
+        merged ? `merged${v.postMergeWarning ? ` (post-merge CI flagged: ${v.postMergeWarning})` : ''}` : `stalled — ${v.cause}`
+      }`,
+    );
   }
 }
 
