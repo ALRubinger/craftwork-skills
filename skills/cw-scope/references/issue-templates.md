@@ -2,6 +2,62 @@
 
 The shapes below are what an `cw-orchestrate` readiness sweep expects to read. Fill every section; an empty section is a gap the sweep will stop on.
 
+## The three-tier model: milestone → umbrella → sub-issue
+
+Work nests in three tiers, and the tiers are **not** the same kind of object:
+
+- **Sub-issue** — a single orchestrate-able unit of work (one PR). Tracked as a GitHub **native sub-issue** of its umbrella.
+- **Umbrella** — an initiative that fans out into sub-issues. Tracks its children as GitHub **native sub-issues** (the sub-issue widget is the single source of truth for the child set and their state — never a body checklist). An umbrella may itself be a native sub-issue of a higher umbrella.
+- **Milestone** — a human-curated roadmap checkpoint that groups umbrellas/issues across a theme (e.g. "v4: containerized runtime"). A milestone is **deliberately a hand-maintained `- [ ] #NNN` checklist, not native sub-issues** — its thematic grouping, per-line annotations, dated scope notes, and readiness flags are load-bearing and have **no native-sub-issue equivalent**. The native widget can hold a flat parent↔child set; it cannot hold "this child shipped via #1037 but #987 was re-parented to v5, and the whole *Pillar 2* theme is done." That curation is the milestone's reason to exist, so it stays a checklist.
+
+`cw-scope` and `cw-orchestrate` own the **umbrella** and **sub-issue** tiers natively. A milestone is a tier *above* the umbrella — usually a human-owned tracker the skills link *up* into (see "Detecting the parent's linking convention") and reconcile against, not one they create or auto-close. The schema below records its shape so the skills read and update it faithfully.
+
+## Milestone body
+
+A milestone is a human roadmap checkpoint. The skills **read and reconcile** it; they do not create or auto-close it. The shape below is the recurring structure of a real milestone (grounded in `ALRubinger/aileron#747` and its successor `#1065`) — present so a skill linking an umbrella up into a milestone, or ticking a resolved child's line, knows where each piece lives.
+
+```markdown
+**Predecessor:** #<prev milestone>      <!-- omit on the first milestone -->
+**Successor:** #<next milestone>         <!-- omit on the latest milestone -->
+
+## Goal
+<What this milestone delivers, in roadmap terms.>
+
+**<name> is done when** <a single observable acceptance line — the "done when"
+condition that closes the milestone.>
+
+> **Scope note (YYYY-MM-DD):** <a dated narrowing/widening of scope. Milestones
+> accrete these as the roadmap shifts; each is dated so the history is legible.
+> Supersedes/defers prior decisions explicitly, citing issue numbers.>
+
+## <Theme A — e.g. Runtime foundation>
+- [x] <shipped item> (#NNN) — merged via #NNN
+- [x] <shipped item, re-parented> (#NNN) — re-parented to #<other milestone>
+- [ ] <remaining item> (#NNN) — *needs brainstorm/plan (<what's unresolved>)*
+
+## <Theme B — e.g. Pillar 1 …>
+- [x] <item> (#NNN)
+- [ ] <item> (#NNN)
+
+## Foundations            <!-- existing work later milestones build on -->
+- <prior-milestone work this one assumes; usually links back to #<predecessor>.>
+
+## Out of scope
+- <what this milestone deliberately excludes; may cite a deferral issue.>
+
+---
+## Requirements (embedded)
+<Embedded roadmap/requirements content, same embedding rule as the umbrella.>
+```
+
+**Annotation grammar** (the load-bearing per-line text native sub-issues can't hold):
+
+- `— merged via #NNN` — the child shipped via that PR.
+- `— re-parented to #NNN` — the child moved to another milestone (cite where).
+- `— *needs brainstorm/plan*` (optionally with a parenthetical of what's unresolved) — the child is a known-but-unscoped roadmap item, not yet orchestrate-able.
+
+The checkbox state (`- [x]` / `- [ ]`), the **thematic section** a line sits in, the **dated scope notes**, and these annotations are the milestone's curation. Preserve them on every edit; never flatten them into a native parent↔child link.
+
 ## Umbrella body
 
 ```markdown
