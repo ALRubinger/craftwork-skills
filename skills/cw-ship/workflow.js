@@ -111,15 +111,6 @@ const PLAN_SCHEMA = {
     claim_comment_id: { type: ['integer', 'null'] },
     summary: { type: 'string', minLength: 1 }, // what the change is, in one paragraph
     open_questions: { type: 'array', items: { type: 'string' } }, // design forks for the operator
-    // Best-effort scheduling hints for the build-wave scheduler (computeBuildWaves).
-    // predicted_paths: repo-relative files/dirs the fix is expected to touch, so two
-    // builds predicted to collide serialize instead of racing. global_surface: true
-    // when the fix regenerates a shared artifact (OpenAPI spec regen, formatter sweep,
-    // generated-file bump) that always collides with everything. BOTH are a scheduling
-    // OPTIMIZATION ONLY — never load-bearing for correctness; the serial-merge gate is
-    // the backstop. Default predicted_paths=[] and global_surface=false when unknown.
-    predicted_paths: { type: 'array', items: { type: 'string' } },
-    global_surface: { type: 'boolean' },
     umbrella_scope: {
       type: ['object', 'null'],
       additionalProperties: false,
@@ -295,54 +286,6 @@ function mergeVerdict(m) {
 }
 
 // ---------------------------------------------------------------------------
-// Pure build-wave scheduler — MIRROR of schedule.mjs's computeBuildWaves (kept
-// in sync; tested there). A Workflow script cannot import sibling modules at
-// runtime, so the canonical implementation is duplicated here verbatim.
-// tests/mirror.test.mjs fails if the two copies drift. Pure: no Date.now(),
-// no Math.random(), no argless `new Date()`. An edge serializes two builds when
-// their predicted paths overlap OR either declares global_surface; all-disjoint
-// collapses to one parallel wave, all-colliding to today's fully-serial loop.
-// Prediction is an OPTIMIZATION ONLY — the serial-merge gate is the backstop.
-// ---------------------------------------------------------------------------
-
-function computeBuildWaves(nodes) {
-  const ids = nodes.map((n) => n.issue).sort((a, b) => a - b);
-  const byId = new Map(nodes.map((n) => [n.issue, n]));
-
-  // Symmetric collision relation as a Set of "min-max" pair keys.
-  const collides = new Set();
-  const key = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
-  for (let i = 0; i < ids.length; i++) {
-    for (let j = i + 1; j < ids.length; j++) {
-      const a = ids[i];
-      const b = ids[j];
-      const na = byId.get(a);
-      const nb = byId.get(b);
-      const globalSurface = na.global_surface === true || nb.global_surface === true;
-      const pa = na.predicted_paths || [];
-      const pb = nb.predicted_paths || [];
-      const overlaps = pa.some((p) => pb.includes(p));
-      if (globalSurface || overlaps) collides.add(key(a, b));
-    }
-  }
-
-  // Greedy graph coloring into waves, ascending issue number for determinism.
-  // An issue joins the earliest wave containing no issue it collides with.
-  const waves = [];
-  for (const id of ids) {
-    let placed = false;
-    for (const wave of waves) {
-      if (wave.some((other) => collides.has(key(id, other)))) continue;
-      wave.push(id);
-      placed = true;
-      break;
-    }
-    if (!placed) waves.push([id]);
-  }
-  return waves.map((w) => [...w].sort((a, b) => a - b));
-}
-
-// ---------------------------------------------------------------------------
 // Role prompt builders
 // ---------------------------------------------------------------------------
 
@@ -412,12 +355,7 @@ STEP 3 — ROUTE. Choose exactly one:
 
 Be conservative: prefer "fix" for bounded work, reserve "needs-input" for real forks, reserve "umbrella" for genuinely large initiatives. Set open_questions=[] and umbrella_scope=null when not applicable.
 
-STEP 4 — PREDICT THE BLAST RADIUS (scheduling hint; best-effort, only meaningful when route="fix"). Independent feedback issues build in PARALLEL; two that would touch the SAME code are serialized so they don't collide. From your STEP-2 research, emit:
-- predicted_paths: the repo-relative files/dirs you expect this fix to touch (e.g. "skills/cw-ship/workflow.js", "internal/api/openapi.yaml"). Best-effort and conservative — list what you're fairly sure you'll edit; an empty list means "no predicted overlap, run me in parallel."
-- global_surface: true ONLY if the fix REGENERATES A SHARED ARTIFACT that always collides with every other build — an OpenAPI spec regen, a repo-wide formatter/codemod sweep, a generated-file bump. Otherwise false.
-This is a scheduling OPTIMIZATION ONLY — never load-bearing for correctness. The serial-merge gate re-checks every conflict against the real default branch, so an under- or over-prediction only changes parallelism, never safety. Set predicted_paths=[] and global_surface=false for non-"fix" routes.
-
-Return structured output: { issue: ${issue}, route, claim_comment_id, summary, open_questions, umbrella_scope, predicted_paths, global_surface }. When you OWN the issue, set claim_comment_id = \$MY_ID (the id from STEP 0a) so a later release can delete your claim. When you yielded, route="yielded" and claim_comment_id=null.`;
+Return structured output: { issue: ${issue}, route, claim_comment_id, summary, open_questions, umbrella_scope }. When you OWN the issue, set claim_comment_id = \$MY_ID (the id from STEP 0a) so a later release can delete your claim. When you yielded, route="yielded" and claim_comment_id=null.`;
 
 const parkPrompt = (a, p, reason) => `You are PARKING one feedback issue for the operator's input, using gh via Bash. Repo ${a.repo}. Issue: ${p.url} (#${p.issue}).
 
@@ -462,7 +400,7 @@ If you cannot reach green build + passing tests + clean review, report ready_to_
 
 Return structured output: { issue, ready_to_merge, p0, pr_number, pr_url, branch, changed_paths, cause }.`;
 
-const mergePrompt = (a, built, claimCommentId, intent) => `You are merging one already-built PR to \`${a.defaultBranch}\` in repo ${a.repo}, headless, with no human. Several cw-ship/cw-sweep/cw-orchestrate runs may be merging to this branch concurrently — AND this run's own build wave may have just merged a SIBLING feedback issue that was predicted to overlap with this one — so do NOT assume the default branch is quiescent; GitHub serializes the actual merge, and your job is to handle the "branch moved under me" outcome gracefully, including resolving a same-base conflict when both sides are legitimate.
+const mergePrompt = (a, built, claimCommentId, intent) => `You are merging one already-built PR to \`${a.defaultBranch}\` in repo ${a.repo}, headless, with no human. Several cw-ship/cw-sweep/cw-orchestrate runs may be merging to this branch concurrently — AND this run builds its feedback issues in parallel, so a SIBLING issue that touches the same code may have just merged ahead of you — so do NOT assume the default branch is quiescent; GitHub serializes the actual merge, and your job is to handle the "branch moved under me" outcome gracefully, including resolving a same-base conflict when both sides are legitimate.
 
 PR #${built.pr_number} (${built.pr_url}), branch \`${built.branch}\`, feedback #${built.issue}.
 
@@ -546,128 +484,129 @@ if (issues.length === 0) {
   return { repo: cfg.repo, planned: [], built: [], umbrellas_filed: [], escalations: [], yielded: [], claimed_elsewhere, held };
 }
 
-// --- Plan (claim + classify), one subagent per issue, in parallel ----------
+// --- Plan + Resolve (streaming) --------------------------------------------
+// Each feedback issue flows plan -> resolve INDEPENDENTLY: the moment an issue's
+// plan lands it routes onward (build / park / umbrella) instead of waiting for
+// the slowest plan to finish. Builds fan out in parallel (isolated worktrees);
+// the MERGE step is the one serialized section — only one PR touches the default
+// branch at a time, because the merge agent rebases against the LIVE branch and
+// concurrent merges would race. A plain promise chain is that mutex.
+//
+// This drops the old build-wave pre-scheduler, trading a scheduling optimization
+// for pipeline latency: two issues that touch the same code now both build off
+// the base and the later one rebases at merge. The merge gate (mergePrompt) is
+// the correctness backstop — it re-checks every PR against the live default
+// branch and resolves a same-base conflict honoring both sides (or stalls the
+// issue), so an overlap the wave scheduler used to avoid is still handled safely.
 phase('Plan');
-const planResults = await parallel(
-  issues.map((it) => () =>
+
+// Merge lock: serialize the merge step across all in-flight builds. Each merge
+// chains after the previous one settles; the chain survives a failed merge (the
+// `.then(noop, noop)`) so one stalled merge never wedges the queue behind it.
+let mergeTail = Promise.resolve();
+const serialMerge = (fn) => {
+  const run = mergeTail.then(() => fn());
+  mergeTail = run.then(() => {}, () => {});
+  return run;
+};
+
+const outcomes = await pipeline(
+  issues,
+  // Stage 1 — plan (claim + classify). Streams onward the instant THIS plan lands.
+  (it) =>
     agent(planPrompt(cfg, it.issue, it.url, it.has_go, it.reclaim === true), {
       label: `plan:${it.issue}`,
       phase: 'Plan',
       schema: PLAN_SCHEMA,
-    }),
-  ),
-);
-const planned = issues
-  .map((it, i) => (planResults[i] ? { issue: it.issue, url: it.url, hasGo: it.has_go, plan: planResults[i] } : null))
-  .filter(Boolean);
+    }).then((plan) => (plan ? { issue: it.issue, url: it.url, hasGo: it.has_go, plan } : null)),
+  // Stage 2 — resolve by disposition, without waiting on sibling plans.
+  async (p) => {
+    if (!p) return null;
+    const disposition = dispositionFor(p.plan, p.hasGo);
 
+    // Yielded: another run owns the issue — do nothing with it.
+    if (disposition === 'skip') return { ...p, disposition };
+
+    if (disposition === 'park') {
+      const park = await agent(parkPrompt(cfg, p, parkReason(p.plan, p.hasGo)), {
+        label: `park:${p.issue}`,
+        phase: 'Resolve',
+        schema: PARK_SCHEMA,
+      });
+      return { ...p, disposition, park };
+    }
+
+    if (disposition === 'umbrella') {
+      const umbrella = await agent(umbrellaPrompt(cfg, p), {
+        label: `umbrella:${p.issue}`,
+        phase: 'Resolve',
+        schema: UMBRELLA_SCHEMA,
+      });
+      if (umbrella && umbrella.umbrella) log(`Filed umbrella #${umbrella.umbrella} from feedback #${p.issue}.`);
+      else log(`Umbrella filing failed for feedback #${p.issue}: ${umbrella?.cause || 'unknown'}`);
+      return { ...p, disposition, umbrella };
+    }
+
+    // disposition === 'build'
+    if (!runBuild) return { ...p, disposition };
+    const b = await agent(buildPrompt(cfg, p), {
+      label: `build:${p.issue}`,
+      phase: 'Resolve',
+      isolation: 'worktree',
+      schema: BUILD_SCHEMA,
+    });
+    if (!b || !b.ready_to_merge || b.p0) {
+      // A planner-missed design fork surfaces here as cause "needs-input: ...".
+      log(`Build #${p.issue}: not merged — ${b?.cause || 'not mergeable'}`);
+      return {
+        ...p,
+        disposition,
+        built: { issue: p.issue, pr: b?.pr_url || null, merged: false, cause: b?.p0 ? 'P0 on diff; PR left open' : b?.cause || 'build not mergeable' },
+      };
+    }
+    // Take the merge lock: one PR lands at a time even though builds ran in parallel.
+    const m = await serialMerge(() =>
+      agent(mergePrompt(cfg, b, p.plan.claim_comment_id, p.plan.summary), {
+        label: `merge:${p.issue}`,
+        phase: 'Resolve',
+        schema: MERGE_SCHEMA,
+      }),
+    );
+    // The PR lands only when the pre-merge CI gate passed. A merged PR is never
+    // reported as not-merged: a genuine post-merge regression rides along as a
+    // warning (the code is already on the default branch), it does not un-merge.
+    const v = mergeVerdict(m);
+    const merged = v.state === 'merged';
+    log(
+      `Build #${p.issue}: ${
+        merged ? `merged${v.postMergeWarning ? ` (post-merge CI flagged: ${v.postMergeWarning})` : ''}` : `stalled — ${v.cause}`
+      }`,
+    );
+    return { ...p, disposition, built: { issue: p.issue, pr: b.pr_url || null, merged, cause: merged ? v.postMergeWarning : v.cause } };
+  },
+);
+
+// Collect the streamed outcomes for the report. Merge/build order is now
+// completion-driven, so sort the report rows by issue for a stable, legible view.
+const resolved = outcomes.filter(Boolean);
+const planned = resolved.map((r) => ({ issue: r.issue, url: r.url, hasGo: r.hasGo, plan: r.plan }));
 const queues = actionQueues(planned);
-const yielded = planned.filter((p) => dispositionFor(p.plan, p.hasGo) === 'skip').map((p) => p.issue);
+const yielded = planned
+  .filter((p) => dispositionFor(p.plan, p.hasGo) === 'skip')
+  .map((p) => p.issue)
+  .sort((a, b) => a - b);
+const umbrellas_filed = resolved
+  .filter((r) => r.umbrella && r.umbrella.umbrella)
+  .map((r) => ({ feedback_issue: r.issue, umbrella: r.umbrella.umbrella, url: r.umbrella.umbrella_url || null, sub_issues: r.umbrella.sub_issues || [] }))
+  .sort((a, b) => a.feedback_issue - b.feedback_issue);
+const built = resolved
+  .filter((r) => r.built)
+  .map((r) => r.built)
+  .sort((a, b) => a.issue - b.issue);
 log(
   `Planned: build=${queues.build.length} umbrella=${queues.umbrella.length} park=${queues.park.length}` +
     (yielded.length ? ` yielded=${yielded.length} (lost claim race: ${yielded.join(', ')})` : ''),
 );
-
-// --- Resolve ---------------------------------------------------------------
-phase('Resolve');
-
-// Park (parallel): write questions / proposed scope into the body, set needs-input.
-await parallel(
-  queues.park.map((p) => () =>
-    agent(parkPrompt(cfg, p, parkReason(p.plan, p.hasGo)), {
-      label: `park:${p.issue}`,
-      phase: 'Resolve',
-      schema: PARK_SCHEMA,
-    }),
-  ),
-);
-
-// Umbrella (serial): file a ready umbrella per approved scope.
-const umbrellas_filed = [];
-for (const p of queues.umbrella) {
-  const u = await agent(umbrellaPrompt(cfg, p), {
-    label: `umbrella:${p.issue}`,
-    phase: 'Resolve',
-    schema: UMBRELLA_SCHEMA,
-  });
-  if (u && u.umbrella) {
-    umbrellas_filed.push({ feedback_issue: p.issue, umbrella: u.umbrella, url: u.umbrella_url || null, sub_issues: u.sub_issues || [] });
-    log(`Filed umbrella #${u.umbrella} from feedback #${p.issue}.`);
-  } else {
-    log(`Umbrella filing failed for feedback #${p.issue}: ${u?.cause || 'unknown'}`);
-  }
-}
-
-// Build, wave by wave: independent feedback issues build in PARALLEL, predicted-
-// colliding (or global_surface) ones serialize. Per wave: fan out the builds
-// (each in its own isolated worktree), then serial-merge that wave's results over
-// the now-quiescent default branch before the next wave starts. Advancing the
-// base between waves means a predicted-overlapping issue builds against the REAL
-// merged code of the wave before it. The serial-merge gate (mergePrompt) is the
-// correctness backstop: it re-checks every conflict against the live default
-// branch, so an under-predicted collision still resolves safely (or stalls) — the
-// schedule only governs parallelism, never safety. All-disjoint -> one parallel
-// wave; all-overlapping -> today's fully-serial behavior (graceful both ways).
-// No explicit concurrency arg to parallel(): the Workflow runtime handles fan-out
-// (the aspirational min(16, cores-2) cap lives in the runtime, not passed here).
-const built = [];
-if (runBuild) {
-  const byIssue = new Map(queues.build.map((p) => [p.issue, p]));
-  const waves = computeBuildWaves(
-    queues.build.map((p) => ({
-      issue: p.issue,
-      predicted_paths: p.plan.predicted_paths || [],
-      global_surface: p.plan.global_surface === true,
-    })),
-  );
-  log(`Build schedule: ${waves.length} wave(s) — ${waves.map((w) => `[${w.join(', ')}]`).join(' ')}`);
-
-  for (const wave of waves) {
-    const waveItems = wave.map((issue) => byIssue.get(issue));
-
-    // Build the whole wave in parallel, each in its own isolated worktree.
-    const builtWave = await parallel(
-      waveItems.map((p) => () =>
-        agent(buildPrompt(cfg, p), {
-          label: `build:${p.issue}`,
-          phase: 'Resolve',
-          isolation: 'worktree',
-          schema: BUILD_SCHEMA,
-        }),
-      ),
-    );
-
-    // Serial-merge this wave's results over the now-quiescent default branch (the
-    // merge lock: one node merges at a time), ascending by issue for determinism.
-    const results = waveItems
-      .map((p, i) => ({ p, b: builtWave[i] }))
-      .sort((x, y) => x.p.issue - y.p.issue);
-    for (const { p, b } of results) {
-      if (!b || !b.ready_to_merge || b.p0) {
-        // A planner-missed design fork surfaces here as cause "needs-input: ...".
-        built.push({ issue: p.issue, pr: b?.pr_url || null, merged: false, cause: b?.p0 ? 'P0 on diff; PR left open' : b?.cause || 'build not mergeable' });
-        log(`Build #${p.issue}: not merged — ${b?.cause || 'not mergeable'}`);
-        continue;
-      }
-      const m = await agent(mergePrompt(cfg, b, p.plan.claim_comment_id, p.plan.summary), {
-        label: `merge:${p.issue}`,
-        phase: 'Resolve',
-        schema: MERGE_SCHEMA,
-      });
-      // The PR lands only when the pre-merge CI gate passed. A merged PR is never
-      // reported as not-merged: a genuine post-merge regression rides along as a
-      // warning (the code is already on the default branch), it does not un-merge.
-      const v = mergeVerdict(m);
-      const merged = v.state === 'merged';
-      built.push({ issue: p.issue, pr: b.pr_url || null, merged, cause: merged ? v.postMergeWarning : v.cause });
-      log(
-        `Build #${p.issue}: ${
-          merged ? `merged${v.postMergeWarning ? ` (post-merge CI flagged: ${v.postMergeWarning})` : ''}` : `stalled — ${v.cause}`
-        }`,
-      );
-    }
-  }
-}
 
 // --- Report ----------------------------------------------------------------
 const report = {

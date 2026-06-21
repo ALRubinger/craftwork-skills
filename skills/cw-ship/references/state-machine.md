@@ -64,19 +64,19 @@ A loop run processes every issue that is **`cw-feedback:new` OR `cw-feedback:go`
 - **Yielded:** the run lost the claim race — it deletes only its **own** losing claim comment and touches nothing else (the winner keeps `cw-feedback:triaging`).
 - **Stalled:** the build left an open PR but did not merge → **keep** `cw-feedback:triaging` AND the claim. A stalled issue with an open PR is held, not crashed; the open PR is what tells a later run's reclaim check the work is still live.
 
-## The build-wave model (parallel builds, serial merge, conflict-resolving gate)
+## The streaming pipeline (per-issue plan→resolve, parallel builds, serial merge)
 
-Within one run, the build queue is not processed one-issue-at-a-time. It is scheduled into **collision-aware waves** by the pure `computeBuildWaves` (canonical in `schedule.mjs`, mirrored into `workflow.js`, drift-guarded by `tests/mirror.test.mjs` and unit-tested in `tests/schedule.test.mjs`):
+Within one run, planning and resolving are **not** two barriered phases. Every discovered issue flows through a `pipeline(issues, plan, resolve)`: the moment an issue's *own* plan lands it routes straight onward (build / park / umbrella), without waiting for the slowest plan in the batch. The only synchronized section is the merge.
 
-- **Edge = collision.** Two feedback issues are placed in different waves when their planner-predicted `predicted_paths` overlap, OR when either declares `global_surface: true` (a regen-from-shared-source change — OpenAPI spec regen, formatter/codemod sweep, generated-file bump — that always collides). Otherwise they share a wave.
-- **Per wave:** the builds fan out in **parallel** (each in its own isolated worktree, opening its own PR), then the wave's results are **serial-merged** over the now-quiescent default branch — one PR at a time, the merge lock. The base **advances between waves**, so a predicted-overlapping issue in a later wave builds against the real merged code of the wave before it.
-- **Graceful degradation both ways:** all-disjoint input collapses to one parallel wave; all-overlapping (or any `global_surface` issue) degrades to today's fully-serial loop.
+- **No plan barrier.** Plans run concurrently and each feeds resolve as it completes, so a fast plan can be building while a slow sibling is still planning.
+- **Builds fan out in parallel.** Each build runs in its own isolated worktree and opens its own PR. There is no pre-build collision scheduler: two issues that touch the same code both build off the base concurrently.
+- **The merge step is the one serialized section.** A promise-chain mutex (`serialMerge` / `mergeTail` in `workflow.js`) ensures only one PR touches the default branch at a time — the merge agent rebases against the *live* branch, so concurrent merges would race. The chain survives a failed merge, so one stalled merge never wedges the queue behind it. Merge/build order is completion-driven; the report rows are sorted by issue for a stable view.
 
-`predicted_paths` / `global_surface` are emitted best-effort by the planner (`PLAN_SCHEMA` + STEP 4 of `planPrompt`) and are a scheduling **optimization only — never load-bearing for correctness.** The serial-merge step is the backstop: it re-checks every PR against the *live* default branch with `git merge-tree`, so an under-predicted collision (two issues that shared a wave but actually touch the same code) is still caught at merge time, and an over-prediction only costs parallelism.
+There is **no `predicted_paths` / `global_surface` prediction** and no `computeBuildWaves` — overlap is not avoided ahead of time, it is **resolved at merge time**. This trades a scheduling optimization for pipeline latency (the later of two colliding builds rebases instead of being scheduled after the first), and leans entirely on the serial-merge step as the correctness backstop: it re-checks every PR against the live default branch with `git merge-tree`, so a real collision is always caught and resolved (or stalled) at merge.
 
 ### Same-base conflict resolution at merge time
 
-The merge step is no longer one-rebase-and-bail. When a PR conflicts against a fresh default branch a sibling in the same wave (or another run) just advanced, the merge agent receives the feedback's **intent** (`p.plan.summary`, passed at the call site) and:
+The merge step is no longer one-rebase-and-bail. When a PR conflicts against a fresh default branch a concurrently-built sibling (or another run) just advanced, the merge agent receives the feedback's **intent** (`p.plan.summary`, passed at the call site) and:
 
 1. Rebases the branch onto fresh default and **resolves the conflicting hunks honoring both sides** — preserving both the already-merged change and this feedback's intent. Never `-X ours`/`-X theirs` a whole file; never delete the landed change to make the rebase apply.
 2. Treats the resolution as untrusted: **re-runs the full build + test suite** on the rebased head as the gate, force-pushes only if green, then runs the standard pre-merge CI gate and merges.
