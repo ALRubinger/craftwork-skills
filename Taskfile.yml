@@ -1,0 +1,16 @@
+version: '3'
+
+tasks:
+  test:
+    desc: Run the node --test suites across all skills
+    cmds:
+      - node --test 'skills/*/tests/*.test.mjs'
+
+  lint:sh:
+    desc: Shellcheck the helper scripts (errors only — block on real bugs, not style)
+    cmds:
+      - shellcheck --severity=error scripts/*.sh
+
+  ci:
+    desc: Full CI gate — tests plus shell lint
+    deps: [test, lint:sh]
