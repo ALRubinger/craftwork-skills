@@ -111,6 +111,15 @@ const PLAN_SCHEMA = {
     claim_comment_id: { type: ['integer', 'null'] },
     summary: { type: 'string', minLength: 1 }, // what the change is, in one paragraph
     open_questions: { type: 'array', items: { type: 'string' } }, // design forks for the operator
+    // Best-effort scheduling hints for the build-wave scheduler (computeBuildWaves).
+    // predicted_paths: repo-relative files/dirs the fix is expected to touch, so two
+    // builds predicted to collide serialize instead of racing. global_surface: true
+    // when the fix regenerates a shared artifact (OpenAPI spec regen, formatter sweep,
+    // generated-file bump) that always collides with everything. BOTH are a scheduling
+    // OPTIMIZATION ONLY — never load-bearing for correctness; the serial-merge gate is
+    // the backstop. Default predicted_paths=[] and global_surface=false when unknown.
+    predicted_paths: { type: 'array', items: { type: 'string' } },
+    global_surface: { type: 'boolean' },
     umbrella_scope: {
       type: ['object', 'null'],
       additionalProperties: false,
@@ -286,6 +295,54 @@ function mergeVerdict(m) {
 }
 
 // ---------------------------------------------------------------------------
+// Pure build-wave scheduler — MIRROR of schedule.mjs's computeBuildWaves (kept
+// in sync; tested there). A Workflow script cannot import sibling modules at
+// runtime, so the canonical implementation is duplicated here verbatim.
+// tests/mirror.test.mjs fails if the two copies drift. Pure: no Date.now(),
+// no Math.random(), no argless `new Date()`. An edge serializes two builds when
+// their predicted paths overlap OR either declares global_surface; all-disjoint
+// collapses to one parallel wave, all-colliding to today's fully-serial loop.
+// Prediction is an OPTIMIZATION ONLY — the serial-merge gate is the backstop.
+// ---------------------------------------------------------------------------
+
+function computeBuildWaves(nodes) {
+  const ids = nodes.map((n) => n.issue).sort((a, b) => a - b);
+  const byId = new Map(nodes.map((n) => [n.issue, n]));
+
+  // Symmetric collision relation as a Set of "min-max" pair keys.
+  const collides = new Set();
+  const key = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const a = ids[i];
+      const b = ids[j];
+      const na = byId.get(a);
+      const nb = byId.get(b);
+      const globalSurface = na.global_surface === true || nb.global_surface === true;
+      const pa = na.predicted_paths || [];
+      const pb = nb.predicted_paths || [];
+      const overlaps = pa.some((p) => pb.includes(p));
+      if (globalSurface || overlaps) collides.add(key(a, b));
+    }
+  }
+
+  // Greedy graph coloring into waves, ascending issue number for determinism.
+  // An issue joins the earliest wave containing no issue it collides with.
+  const waves = [];
+  for (const id of ids) {
+    let placed = false;
+    for (const wave of waves) {
+      if (wave.some((other) => collides.has(key(id, other)))) continue;
+      wave.push(id);
+      placed = true;
+      break;
+    }
+    if (!placed) waves.push([id]);
+  }
+  return waves.map((w) => [...w].sort((a, b) => a - b));
+}
+
+// ---------------------------------------------------------------------------
 // Role prompt builders
 // ---------------------------------------------------------------------------
 
@@ -355,7 +412,12 @@ STEP 3 — ROUTE. Choose exactly one:
 
 Be conservative: prefer "fix" for bounded work, reserve "needs-input" for real forks, reserve "umbrella" for genuinely large initiatives. Set open_questions=[] and umbrella_scope=null when not applicable.
 
-Return structured output: { issue: ${issue}, route, claim_comment_id, summary, open_questions, umbrella_scope }. When you OWN the issue, set claim_comment_id = \$MY_ID (the id from STEP 0a) so a later release can delete your claim. When you yielded, route="yielded" and claim_comment_id=null.`;
+STEP 4 — PREDICT THE BLAST RADIUS (scheduling hint; best-effort, only meaningful when route="fix"). Independent feedback issues build in PARALLEL; two that would touch the SAME code are serialized so they don't collide. From your STEP-2 research, emit:
+- predicted_paths: the repo-relative files/dirs you expect this fix to touch (e.g. "skills/cw-ship/workflow.js", "internal/api/openapi.yaml"). Best-effort and conservative — list what you're fairly sure you'll edit; an empty list means "no predicted overlap, run me in parallel."
+- global_surface: true ONLY if the fix REGENERATES A SHARED ARTIFACT that always collides with every other build — an OpenAPI spec regen, a repo-wide formatter/codemod sweep, a generated-file bump. Otherwise false.
+This is a scheduling OPTIMIZATION ONLY — never load-bearing for correctness. The serial-merge gate re-checks every conflict against the real default branch, so an under- or over-prediction only changes parallelism, never safety. Set predicted_paths=[] and global_surface=false for non-"fix" routes.
+
+Return structured output: { issue: ${issue}, route, claim_comment_id, summary, open_questions, umbrella_scope, predicted_paths, global_surface }. When you OWN the issue, set claim_comment_id = \$MY_ID (the id from STEP 0a) so a later release can delete your claim. When you yielded, route="yielded" and claim_comment_id=null.`;
 
 const parkPrompt = (a, p, reason) => `You are PARKING one feedback issue for the operator's input, using gh via Bash. Repo ${a.repo}. Issue: ${p.url} (#${p.issue}).
 
@@ -400,19 +462,22 @@ If you cannot reach green build + passing tests + clean review, report ready_to_
 
 Return structured output: { issue, ready_to_merge, p0, pr_number, pr_url, branch, changed_paths, cause }.`;
 
-const mergePrompt = (a, built, claimCommentId) => `You are merging one already-built PR to \`${a.defaultBranch}\` in repo ${a.repo}, headless, with no human. Several cw-ship/cw-sweep/cw-orchestrate runs may be merging to this branch concurrently — do NOT assume the default branch is quiescent; GitHub serializes the actual merge, and your job is to handle the "branch moved under me" outcome gracefully.
+const mergePrompt = (a, built, claimCommentId, intent) => `You are merging one already-built PR to \`${a.defaultBranch}\` in repo ${a.repo}, headless, with no human. Several cw-ship/cw-sweep/cw-orchestrate runs may be merging to this branch concurrently — AND this run's own build wave may have just merged a SIBLING feedback issue that was predicted to overlap with this one — so do NOT assume the default branch is quiescent; GitHub serializes the actual merge, and your job is to handle the "branch moved under me" outcome gracefully, including resolving a same-base conflict when both sides are legitimate.
 
 PR #${built.pr_number} (${built.pr_url}), branch \`${built.branch}\`, feedback #${built.issue}.
 
+The intent of THIS feedback change (so you can resolve a conflict honoring BOTH sides, never clobbering the already-merged one):
+${intent || '(no summary provided — resolve conservatively, preserving both the incoming change and what is already on the default branch)'}
+
 Steps:
 1. \`git fetch origin ${a.defaultBranch} ${built.branch}\`.
-2. PRE-MERGE CONFLICT CHECK against FRESH ${a.defaultBranch}: \`git merge-tree --write-tree --name-only origin/${a.defaultBranch} origin/${built.branch}\`. If it reports a conflict, do NOT merge: try ONE clean rebase of the branch onto fresh ${a.defaultBranch} and push with --force-with-lease; if it still conflicts or needs human judgment, report merged:false, cause "pre-merge conflict against ${a.defaultBranch}".
+2. PRE-MERGE CONFLICT CHECK against FRESH ${a.defaultBranch}: \`git merge-tree --write-tree --name-only origin/${a.defaultBranch} origin/${built.branch}\`. If it reports a conflict — a sibling in this wave (or another run) merged a change to shared code first — do NOT blind-merge. Rebase this branch onto fresh ${a.defaultBranch} and RESOLVE the conflicting hunks so that BOTH the already-merged change AND this feedback's intent (above) survive — never \`-X ours\`/\`-X theirs\` a whole file, never delete the already-landed change to make the rebase apply. Then the resolution is UNTRUSTED until proven: RE-RUN THE FULL BUILD + TEST SUITE on the rebased head (the same suite the build step ran — discover it from AGENTS.md/CLAUDE.md/package.json/Taskfile). Only if it is green, \`git push --force-with-lease\` and continue to the CI gate. If the conflict cannot be resolved while preserving both sides, OR the re-run build/tests fail after resolution, do NOT force-resolve and do NOT merge: report merged:false, cause "same-base conflict against ${a.defaultBranch}: <unresolvable | resolution failed tests>". The issue stays held for the operator. (For a trivially-clean rebase with no conflicting hunks, a plain rebase + the standard CI gate below is enough — the re-run is only required when you actually resolved a conflict.)
 3. PRE-MERGE CI GATE — wait for green, THEN merge. NEVER merge over a pending or failing blocking check; \`--admin\` bypasses required-review, NOT in-progress or failing validation.
    a. Block until every check concludes: \`gh pr checks ${built.pr_number} --repo ${a.repo} --watch --interval 30\` (no \`queued\`/\`in_progress\` may remain). Then read final conclusions: \`gh pr checks ${built.pr_number} --repo ${a.repo}\`.
    b. BLOCKING checks — build, unit/integration tests, lint, vet, type/check, smoke builds, security scans — MUST every one conclude \`success\`. If ANY concluded \`failure\`/\`timed_out\`/\`startup_failure\`/\`action_required\`, do NOT merge: report \`merged:false\`, put their names in \`ci.failing_checks\`, set cause "pre-merge CI failed: <checks>". Do NOT fix it here (that is the build step's job) — the issue stays held with the failing check named.
    c. ADVISORY checks — coverage thresholds (\`codecov/patch\`, \`codecov/project\`) and preview/deploy checks — are soft gates per repo policy. A non-\`success\` advisory check does NOT block; record its name in \`ci.advisory_nonblocking\` and proceed. When unsure whether a check is blocking, treat it as BLOCKING; consult the repo's CLAUDE.md / AGENTS.md if it names required checks.
    d. A run \`cancelled\` by GitHub Actions \`concurrency: cancel-in-progress\` (a later commit landed while you waited) is NOT a failure — re-run \`--watch\` once to pick up the superseding run's conclusions before deciding. If checks never conclude within ~30 minutes, report \`merged:false\`, cause "pre-merge CI did not conclude (timeout)".
-4. Only when every blocking check is green: \`gh pr merge ${built.pr_number} --repo ${a.repo} --squash --admin --delete-branch\`. If gh reports the PR is out of date / not mergeable because the base moved (another run merged first), that is EXPECTED under concurrency — re-fetch ${a.defaultBranch}, re-run the merge-tree check, rebase onto fresh ${a.defaultBranch} if needed, RE-RUN the pre-merge CI gate (step 3) on the rebased head, and retry the merge ONCE. Still failing → report merged:false, cause "base moved; needs rebase".
+4. Only when every blocking check is green: \`gh pr merge ${built.pr_number} --repo ${a.repo} --squash --admin --delete-branch\`. If gh reports the PR is out of date / not mergeable because the base moved (a sibling in this wave or another run merged first), that is EXPECTED under concurrency — re-fetch ${a.defaultBranch}, re-run the merge-tree check, and rebase onto fresh ${a.defaultBranch} if needed. If the rebase hits conflicting hunks, resolve them honoring BOTH sides and RE-RUN the full build + test suite per step 2 (never force-resolve; a failing re-run stalls the issue). Then RE-RUN the pre-merge CI gate (step 3) on the rebased head, and retry the merge ONCE. Still failing → report merged:false, cause "base moved; needs rebase".
 5. Verify and complete the terminal transition: PR state is MERGED; branch is gone (\`git ls-remote --heads origin ${built.branch}\` empty — if not, \`git push origin --delete ${built.branch}\`). The merge closes feedback #${built.issue} via the Closes line; confirm it is closed. Closing is a TERMINAL transition, so remove the in-flight claim label in the same step — cw-feedback:triaging and a closed/terminal state are mutually exclusive and a merged feedback issue must not keep the in-flight claim label: \`gh issue edit ${built.issue} --repo ${a.repo} --remove-label cw-feedback:triaging 2>/dev/null || true\`${claimCommentId ? `, then RELEASE this run's claim (\`gh api -X DELETE repos/${a.repo}/issues/comments/${claimCommentId} 2>/dev/null || true\`) — the issue is done` : ''}.
 6. POST-MERGE sanity (regression detector only — the landing already passed the CI gate in step 3, so this rarely fires). Inspect the merge commit's checks (\`gh pr checks ${built.pr_number} --repo ${a.repo}\` / \`gh run list\`):
    - A run \`cancelled\` by \`concurrency: cancel-in-progress\` (a later commit landed on \`${a.defaultBranch}\` — another merge or an unrelated bot PR such as Renovate) is NOT a failure. Set \`ci.cancelled: true\`; confirm on the \`${a.defaultBranch}\` TIP and only record a genuinely-failed check in \`failing_checks\`.
@@ -533,38 +598,74 @@ for (const p of queues.umbrella) {
   }
 }
 
-// Build (serial over a quiescent default branch): implement -> PR -> merge.
+// Build, wave by wave: independent feedback issues build in PARALLEL, predicted-
+// colliding (or global_surface) ones serialize. Per wave: fan out the builds
+// (each in its own isolated worktree), then serial-merge that wave's results over
+// the now-quiescent default branch before the next wave starts. Advancing the
+// base between waves means a predicted-overlapping issue builds against the REAL
+// merged code of the wave before it. The serial-merge gate (mergePrompt) is the
+// correctness backstop: it re-checks every conflict against the live default
+// branch, so an under-predicted collision still resolves safely (or stalls) — the
+// schedule only governs parallelism, never safety. All-disjoint -> one parallel
+// wave; all-overlapping -> today's fully-serial behavior (graceful both ways).
+// No explicit concurrency arg to parallel(): the Workflow runtime handles fan-out
+// (the aspirational min(16, cores-2) cap lives in the runtime, not passed here).
 const built = [];
 if (runBuild) {
-  for (const p of queues.build) {
-    const b = await agent(buildPrompt(cfg, p), {
-      label: `build:${p.issue}`,
-      phase: 'Resolve',
-      isolation: 'worktree',
-      schema: BUILD_SCHEMA,
-    });
-    if (!b || !b.ready_to_merge || b.p0) {
-      // A planner-missed design fork surfaces here as cause "needs-input: ...".
-      built.push({ issue: p.issue, pr: b?.pr_url || null, merged: false, cause: b?.p0 ? 'P0 on diff; PR left open' : b?.cause || 'build not mergeable' });
-      log(`Build #${p.issue}: not merged — ${b?.cause || 'not mergeable'}`);
-      continue;
-    }
-    const m = await agent(mergePrompt(cfg, b, p.plan.claim_comment_id), {
-      label: `merge:${p.issue}`,
-      phase: 'Resolve',
-      schema: MERGE_SCHEMA,
-    });
-    // The PR lands only when the pre-merge CI gate passed. A merged PR is never
-    // reported as not-merged: a genuine post-merge regression rides along as a
-    // warning (the code is already on the default branch), it does not un-merge.
-    const v = mergeVerdict(m);
-    const merged = v.state === 'merged';
-    built.push({ issue: p.issue, pr: b.pr_url || null, merged, cause: merged ? v.postMergeWarning : v.cause });
-    log(
-      `Build #${p.issue}: ${
-        merged ? `merged${v.postMergeWarning ? ` (post-merge CI flagged: ${v.postMergeWarning})` : ''}` : `stalled — ${v.cause}`
-      }`,
+  const byIssue = new Map(queues.build.map((p) => [p.issue, p]));
+  const waves = computeBuildWaves(
+    queues.build.map((p) => ({
+      issue: p.issue,
+      predicted_paths: p.plan.predicted_paths || [],
+      global_surface: p.plan.global_surface === true,
+    })),
+  );
+  log(`Build schedule: ${waves.length} wave(s) — ${waves.map((w) => `[${w.join(', ')}]`).join(' ')}`);
+
+  for (const wave of waves) {
+    const waveItems = wave.map((issue) => byIssue.get(issue));
+
+    // Build the whole wave in parallel, each in its own isolated worktree.
+    const builtWave = await parallel(
+      waveItems.map((p) => () =>
+        agent(buildPrompt(cfg, p), {
+          label: `build:${p.issue}`,
+          phase: 'Resolve',
+          isolation: 'worktree',
+          schema: BUILD_SCHEMA,
+        }),
+      ),
     );
+
+    // Serial-merge this wave's results over the now-quiescent default branch (the
+    // merge lock: one node merges at a time), ascending by issue for determinism.
+    const results = waveItems
+      .map((p, i) => ({ p, b: builtWave[i] }))
+      .sort((x, y) => x.p.issue - y.p.issue);
+    for (const { p, b } of results) {
+      if (!b || !b.ready_to_merge || b.p0) {
+        // A planner-missed design fork surfaces here as cause "needs-input: ...".
+        built.push({ issue: p.issue, pr: b?.pr_url || null, merged: false, cause: b?.p0 ? 'P0 on diff; PR left open' : b?.cause || 'build not mergeable' });
+        log(`Build #${p.issue}: not merged — ${b?.cause || 'not mergeable'}`);
+        continue;
+      }
+      const m = await agent(mergePrompt(cfg, b, p.plan.claim_comment_id, p.plan.summary), {
+        label: `merge:${p.issue}`,
+        phase: 'Resolve',
+        schema: MERGE_SCHEMA,
+      });
+      // The PR lands only when the pre-merge CI gate passed. A merged PR is never
+      // reported as not-merged: a genuine post-merge regression rides along as a
+      // warning (the code is already on the default branch), it does not un-merge.
+      const v = mergeVerdict(m);
+      const merged = v.state === 'merged';
+      built.push({ issue: p.issue, pr: b.pr_url || null, merged, cause: merged ? v.postMergeWarning : v.cause });
+      log(
+        `Build #${p.issue}: ${
+          merged ? `merged${v.postMergeWarning ? ` (post-merge CI flagged: ${v.postMergeWarning})` : ''}` : `stalled — ${v.cause}`
+        }`,
+      );
+    }
   }
 }
 
