@@ -115,6 +115,7 @@ Write the manifest per [references/manifest-schema.md](./references/manifest-sch
 ```
 
 - `runId` and `timestamp` are generated **here, in the main session** (the Workflow forbids `Date.now()` / `Math.random()`; they arrive via `args`).
+- `targetBranch` is optional (omitted above): it defaults to `defaultBranch`. Set it only to land this umbrella's PRs on an integration/release branch while still branching off `defaultBranch` for freshness — see manifest-schema.md for the base-vs-target split.
 - Briefs and the manifest live under a run-scoped working directory the background Workflow can read by absolute path (see manifest-schema.md for the location decision).
 
 Then get an explicit **"go"** from the operator (AskUserQuestion). This is the last human checkpoint (R4). Show the routed list, the dependency edges, and the manifest path before asking.

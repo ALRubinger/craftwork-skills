@@ -157,6 +157,8 @@ gh issue create \
 >
 > If you cannot reach a green build + passing tests + clean review, report `ready_to_merge: false` with the cause rather than papering over it.
 
+The work role always branches off and tests against fresh `{defaultBranch}` (the *freshness base*), regardless of where the PR ultimately lands. The *merge target* — the branch the serial merge step squash-merges onto — is `{targetBranch}` (defaults to `{defaultBranch}`). When the two differ, the work role must open the PR **against the target** (`gh pr create --base {targetBranch}`), or the squash-merge would land on the wrong branch; when they are equal the instruction is omitted (byte-identical single-branch behavior). See `manifest-schema.md` for the base-vs-target split.
+
 **Output schema (`BUILD_SCHEMA`):**
 
 ```json

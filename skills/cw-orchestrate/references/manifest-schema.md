@@ -47,13 +47,16 @@ Briefs and the manifest live under a **run-scoped working directory addressed by
 }
 ```
 
+**Base vs. target.** `defaultBranch` and `targetBranch` separate two roles that collapse to one branch in the common case. `defaultBranch` is the *freshness base* — every work subagent branches off and rebases onto fresh `defaultBranch`, so it always builds against current code. `targetBranch` (optional) is the *merge target* — the branch the squash-merge actually lands on and the branch the pre-merge `git merge-tree` conflict check diffs against. When `targetBranch` is absent (null/undefined) it defaults to `defaultBranch`, and every generated prompt is byte-identical to the single-branch behavior. Resolution uses `??` (nullish coalescing), so only an *absent* `targetBranch` falls back to `defaultBranch`; a *present* value is taken as-is. Invariant 5 (below) is what guarantees a present value is a non-empty branch name — the manifest validation rejects an empty string before "go", so the `??`-only fallback never has to defend against one at runtime.
+
 ### Field contract
 
 | Field | Type | Meaning |
 |-------|------|---------|
 | `umbrella` | number | Parent issue number. |
 | `repo` | string | `owner/name`, so subagents can target `gh` explicitly. |
-| `defaultBranch` | string | Merge target (`main` for this repo family). |
+| `defaultBranch` | string | **Freshness base** (`main` for this repo family): the branch work subagents branch off and rebase onto for fresh code. Also the **merge target** when `targetBranch` is absent. |
+| `targetBranch` | string (optional) | **Merge target**: the branch the squash-merge lands on and that the pre-merge `git merge-tree` check diffs against. Defaults to `defaultBranch` when absent. Set it to land an umbrella's PRs on an integration/release branch instead of the default branch while still branching off the default branch for freshness. |
 | `runId` | string | Stable run identifier. **Minted in the main session** — the Workflow forbids `Date.now()`/`Math.random()`. |
 | `timestamp` | string (ISO 8601) | Run start. Also minted in the main session; passed through for any time-stamping the Workflow needs. |
 | `issues[]` | array | One entry per **ready** sub-issue (back-off issues are ready once their `ce-brainstorm` doc exists). |
@@ -68,6 +71,7 @@ Briefs and the manifest live under a **run-scoped working directory addressed by
 2. Every `depends_on` entry references a `number` present in `issues[]`.
 3. The `depends_on` edges form a **DAG** — no cycles. Reject a cycle with an error naming the participating issues. (The scheduler in `workflow.js` re-validates; catching it here keeps the operator in the loop.)
 4. `runId` and `timestamp` are present and non-empty (the Workflow depends on them for determinism).
+5. If `targetBranch` is present it is a non-empty string. (Absent is fine — it defaults to `defaultBranch`.)
 
 ## Brief contract
 

@@ -355,8 +355,19 @@ function mergeVerdict(m) {
 }
 
 // ---------------------------------------------------------------------------
-// Role prompt builders (mirror references/subagent-roles.md & merge-safety.md)
+// Role prompt builders (mirror references/subagent-roles.md & merge-safety.md).
+//
+// workPrompt, mergePrompt, and triagePrompt are BYTE-FOR-BYTE mirrors of
+// prompts.mjs (the tested canonical source); tests/mirror.test.mjs drift-guards
+// them. Base vs. target: `defaultBranch` is the freshness base (branch off /
+// fetch fresh); `targetBranch` (optional, defaults to `defaultBranch`) is the
+// merge target. With targetBranch absent or equal to defaultBranch, every
+// rendered string is byte-identical to the single-branch behavior.
 // ---------------------------------------------------------------------------
+
+// Resolve the merge target. `??` (not `||`) so an intentional empty string is
+// NOT silently replaced; only an absent targetBranch falls back to the base.
+const mergeTarget = (m) => m.targetBranch ?? m.defaultBranch;
 
 const planPrompt = (m, issue, briefText) => `You are planning a single GitHub sub-issue in a fresh context. You will NOT implement it; you produce a plan document and a file-ownership table.
 
@@ -404,7 +415,15 @@ Steps:
 
 Return structured output: { issue, residual_url }.`;
 
-const workPrompt = (m, node) => `You are implementing one GitHub issue in an isolated git worktree, in a fresh context, with no human available. Take it from plan to an open, review-clean PR — do NOT merge; the orchestrator merges serially after you return.
+const workPrompt = (m, node) => {
+  const target = mergeTarget(m);
+  // The PR must open against the MERGE TARGET, not the GitHub-configured default
+  // branch. When target === defaultBranch this clause is empty, so the rendered
+  // prompt is byte-identical to the single-branch behavior; when they differ,
+  // `gh pr create` needs an explicit `--base ${target}` or it would target the
+  // wrong branch (the squash-merge would then land the code on the wrong base).
+  const baseClause = target === m.defaultBranch ? '' : ` Open it against the merge target with \`gh pr create --base ${target}\` (you branched off \`${m.defaultBranch}\` for freshness, but the PR must land on \`${target}\`).`;
+  return `You are implementing one GitHub issue in an isolated git worktree, in a fresh context, with no human available. Take it from plan to an open, review-clean PR — do NOT merge; the orchestrator merges serially after you return.
 
 Issue #${node.issue} (repo ${m.repo}, base ${m.defaultBranch}). Plan:
 \`\`\`
@@ -415,21 +434,27 @@ Steps:
 1. Create a branch off fresh \`${m.defaultBranch}\` in your worktree.
 2. Implement the plan. Follow repo conventions (AGENTS.md/CLAUDE.md): regenerate generated files rather than hand-editing; write tests for new behavior; keep coverage above the repo bar.
 3. Run the repo's build + test suite. Tests must pass before you open a PR.
-4. Open a PR and push the branch. Conventional-commit title; the body has a Summary and a Test plan AND MUST include a \`Closes #${node.issue}\` line on its own line so the squash-merge auto-closes the sub-issue. Do not omit it — the orchestrator reconciles issue state afterward, but the closing keyword is what makes the common path self-closing.
+4. Open a PR and push the branch.${baseClause} Conventional-commit title; the body has a Summary and a Test plan AND MUST include a \`Closes #${node.issue}\` line on its own line so the squash-merge auto-closes the sub-issue. Do not omit it — the orchestrator reconciles issue state afterward, but the closing keyword is what makes the common path self-closing.
 5. Run a code-review pass on your own diff. A P0 is a correctness/security/data-loss/scope finding that must not merge. Fix and re-review if you can; if a P0 cannot be safely auto-fixed here, leave the PR open and report p0:true — do NOT signal ready_to_merge.
 6. Report the PR number/URL, branch, the files you actually changed, and your verdict.
 
 If you cannot reach green build + passing tests + clean review, report ready_to_merge:false with the cause rather than papering over it.
 
 Return structured output: { issue, ready_to_merge, p0, pr_number, pr_url, branch, changed_paths, cause }.`;
+};
 
-const mergePrompt = (m, built) => `You are performing a SERIALIZED merge of one already-built PR to \`${m.defaultBranch}\` in repo ${m.repo}, headless, with no human. Only one merge runs at a time; you are it right now.
+const mergePrompt = (m, built) => {
+  const target = mergeTarget(m);
+  // Fetch the freshness base AND the merge target (deduped so the single-branch
+  // case yields exactly `git fetch origin main <branch>` — byte-identical).
+  const fetchRefs = [...new Set([m.defaultBranch, target, built.branch])].join(' ');
+  return `You are performing a SERIALIZED merge of one already-built PR to \`${target}\` in repo ${m.repo}, headless, with no human. Only one merge runs at a time; you are it right now.
 
 PR #${built.pr_number} (${built.pr_url}), branch \`${built.branch}\`, issue #${built.issue}.
 
 Steps (see references/merge-safety.md):
-1. \`git fetch origin ${m.defaultBranch} ${built.branch}\`.
-2. PRE-MERGE CONFLICT CHECK against FRESH ${m.defaultBranch}: run \`git merge-tree --write-tree --name-only origin/${m.defaultBranch} origin/${built.branch}\`. If it reports a conflict, do NOT merge: try ONE clean rebase of the branch onto fresh ${m.defaultBranch} and push with --force-with-lease; if it still conflicts or needs human judgment, report merged:false, cause "pre-merge conflict against ${m.defaultBranch}".
+1. \`git fetch origin ${fetchRefs}\`.
+2. PRE-MERGE CONFLICT CHECK against FRESH ${target}: run \`git merge-tree --write-tree --name-only origin/${target} origin/${built.branch}\`. If it reports a conflict, do NOT merge: try ONE clean rebase of the branch onto fresh ${target} and push with --force-with-lease; if it still conflicts or needs human judgment, report merged:false, cause "pre-merge conflict against ${target}".
 3. PRE-MERGE CI GATE — wait for green, then merge. NEVER merge over a pending or failing blocking check; \`--admin\` bypasses required-review, NOT in-progress or failing validation.
    a. Block until every check concludes: \`gh pr checks ${built.pr_number} --repo ${m.repo} --watch --interval 30\` (no \`queued\`/\`in_progress\` may remain). Then read final conclusions: \`gh pr checks ${built.pr_number} --repo ${m.repo}\`.
    b. BLOCKING checks — build, unit/integration tests, lint, vet, type/Svelte check, smoke builds, security scans — MUST every one conclude \`success\`. If ANY concluded \`failure\`/\`timed_out\`/\`startup_failure\`/\`action_required\`, do NOT merge: report \`merged:false\`, put their names in \`ci.failing_checks\`, set cause "pre-merge CI failed: <checks>". Do NOT fix it here (that is the work step's job) — the node stalls for the operator with the failing check named.
@@ -438,23 +463,26 @@ Steps (see references/merge-safety.md):
 4. Only when every blocking check is green: \`gh pr merge ${built.pr_number} --repo ${m.repo} --squash --admin --delete-branch\`.
 5. Verify: PR state is MERGED (\`gh pr view ${built.pr_number} --repo ${m.repo} --json state\`); branch is gone (\`git ls-remote --heads origin ${built.branch}\` empty — if not, \`git push origin --delete ${built.branch}\`). Report \`merged: true\`.
 6. POST-MERGE sanity (regression detector only — the landing already passed CI in step 3, so this rarely fires). Inspect the merge commit's checks (\`gh pr checks ${built.pr_number} --repo ${m.repo}\` / \`gh run list\`):
-   - A run \`cancelled\` by GitHub Actions \`concurrency: cancel-in-progress\` (a later commit landed on \`${m.defaultBranch}\` — the next serialized node or an unrelated bot PR such as Renovate) is NOT a failure. Set \`ci.cancelled: true\`; confirm on the \`${m.defaultBranch}\` TIP and only record a genuinely-failed check in \`failing_checks\`.
+   - A run \`cancelled\` by GitHub Actions \`concurrency: cancel-in-progress\` (a later commit landed on \`${target}\` — the next serialized node or an unrelated bot PR such as Renovate) is NOT a failure. Set \`ci.cancelled: true\`; confirm on the \`${target}\` TIP and only record a genuinely-failed check in \`failing_checks\`.
    - Only a real \`failure\` conclusion on the merge commit (not advisory, not cancelled) goes in \`ci.failing_checks\`; it is surfaced as a post-merge regression warning on the merged node, NOT a stall (the PR has merged).
 
 Never force-resolve a conflict. Never merge over a pending or failing blocking check.
 
 Return structured output: { issue, merged, pr_state, branch_gone, ci: { failing_checks, advisory_nonblocking, cancelled, pending }, cause }.`;
+};
 
-const triagePrompt = (m, subIssue, residualUrl, prHint) => `You are triaging a "cw-review-residual" issue against the SHIPPED code, headless, with no human. These residuals were filed against an implementation PLAN; your job is to re-judge each finding against what actually merged, then act on the cheap/clear ones and leave only genuine judgment calls for a human.
+const triagePrompt = (m, subIssue, residualUrl, prHint) => {
+  const target = mergeTarget(m);
+  return `You are triaging a "cw-review-residual" issue against the SHIPPED code, headless, with no human. These residuals were filed against an implementation PLAN; your job is to re-judge each finding against what actually merged, then act on the cheap/clear ones and leave only genuine judgment calls for a human.
 
-Repo ${m.repo}, default branch ${m.defaultBranch}.
+Repo ${m.repo}, default branch ${target}.
 Residual issue: ${residualUrl}
 Tracks sub-issue: #${subIssue}${prHint ? `\nThe sub-issue merged via: ${prHint}` : ''}
 
 Steps:
 1. Read the residual issue body (\`gh issue view ${residualUrl} --json title,body\`) and extract its findings.
 2. Establish whether the sub-issue #${subIssue} has SHIPPED: confirm its closing PR is MERGED${prHint ? ` (${prHint})` : ` (\`gh issue view ${subIssue} --repo ${m.repo} --json state,closedByPullRequestsReferences\`, then verify that PR is MERGED)`}. If it has NOT shipped (open/halted, no merged PR), set shipped:false, mark every finding verdict "DECISION" with rationale "sub-issue not yet shipped; cannot triage against code", do NOT close the residual, and return. A future run triages it once the feature lands.
-3. If shipped, read the merged diff (\`gh pr diff <pr> --repo ${m.repo}\`) and the current files on ${m.defaultBranch}. For EACH finding, classify against the shipped code:
+3. If shipped, read the merged diff (\`gh pr diff <pr> --repo ${m.repo}\`) and the current files on ${target}. For EACH finding, classify against the shipped code:
    - RESOLVED — the merged code already does the right thing. Cite the file/line that proves it.
    - FIX_NOW  — a real, small, unambiguous fix. Set confidence "high" only if you are sure the fix is correct, safe, and in-scope (it will be applied and merged with NO human review). If there is any ambiguity about correctness, scope, or approach, set confidence "low".
    - DECISION — needs a human judgment call (a real trade-off, a product/behavior choice, or a fix whose correct form is unclear). Never use this as a dumping ground; reserve it for genuine choices.
@@ -465,6 +493,7 @@ Steps:
 Be conservative about closing and about high-confidence: closing a real issue or auto-merging a wrong fix is worse than leaving a residual open for a human.
 
 Return structured output: { residual_issue, sub_issue, shipped, closed, findings: [{title, severity, verdict, confidence, rationale, fix_hint}] }.`;
+};
 
 const autofixPrompt = (m, tr) => `You are implementing ONLY a set of small, high-confidence cleanup fixes for cw-review-residual #${tr.residual_issue} (sub-issue #${tr.sub_issue}) in an isolated git worktree, headless, with no human. Do NOT merge; the orchestrator merges serially after you return.
 
