@@ -2,6 +2,8 @@
 
 The work stage runs in a **no-human window**: N worktree subagents producing PRs that merge to the default branch with nobody watching. Merge safety is the set of guarantees that make that window safe (R14, R15, R16). The governing principle: **`main` advances deterministically, one merge at a time, and never absorbs an unexpected conflict, a P0, or a red/pending CI run.**
 
+> **Base vs. target.** Two roles, one branch in the common case (see `manifest-schema.md`). `base` here means the *freshness base* (`defaultBranch`): where work subagents branch off and where the next wave fetches fresh code. The *merge target* — the branch the squash-merge lands on and that the pre-merge `git merge-tree` check diffs the PR branch against — is `targetBranch`, which defaults to `defaultBranch`. When they differ (e.g. landing an umbrella's PRs on an integration branch), branch off `defaultBranch` for freshness but merge onto / merge-tree against `targetBranch`. The shell snippet below uses `base` for the merge-tree/merge target; substitute `targetBranch` when it is set.
+
 ## The six guarantees
 
 1. **Serialized merges (R14).** At most one node merges to the default branch at a time. The work role *builds* in parallel (each in its own worktree); the orchestrator *merges* serially. A single in-script merge step processed one node at a time is the lock — there is no concurrent `gh pr merge`.
