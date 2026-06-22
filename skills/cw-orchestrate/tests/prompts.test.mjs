@@ -91,11 +91,21 @@ test('mergePrompt retargets the merge target, merge-tree base, cause and tip', (
   assert.equal((p.match(/\bmain\b/g) || []).length, 1);
 });
 
-test('workPrompt branch-off stays on the freshness base (defaultBranch), never the target', () => {
+test('workPrompt branches off the freshness base but opens the PR against the target', () => {
   const p = workPrompt(integ, node);
+  // Freshness: branch off + build against defaultBranch.
   assert.ok(p.includes('Create a branch off fresh `main`'));
   assert.ok(p.includes('base main'));
-  assert.ok(!p.includes('integration/foo'));
+  // Merge target: the PR must be opened against the target, else the squash
+  // lands on the wrong branch.
+  assert.ok(p.includes('gh pr create --base integration/foo'));
+  assert.ok(p.includes('the PR must land on `integration/foo`'));
+});
+
+test('workPrompt omits the --base clause entirely when target === defaultBranch (byte-identity)', () => {
+  const p = workPrompt({ ...baseManifest, targetBranch: 'main' }, node);
+  assert.ok(!p.includes('gh pr create --base'));
+  assert.equal(p, goldens.workPrompt);
 });
 
 test('triagePrompt shipped-code references point at the target', () => {

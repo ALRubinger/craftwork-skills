@@ -415,7 +415,15 @@ Steps:
 
 Return structured output: { issue, residual_url }.`;
 
-const workPrompt = (m, node) => `You are implementing one GitHub issue in an isolated git worktree, in a fresh context, with no human available. Take it from plan to an open, review-clean PR — do NOT merge; the orchestrator merges serially after you return.
+const workPrompt = (m, node) => {
+  const target = mergeTarget(m);
+  // The PR must open against the MERGE TARGET, not the GitHub-configured default
+  // branch. When target === defaultBranch this clause is empty, so the rendered
+  // prompt is byte-identical to the single-branch behavior; when they differ,
+  // `gh pr create` needs an explicit `--base ${target}` or it would target the
+  // wrong branch (the squash-merge would then land the code on the wrong base).
+  const baseClause = target === m.defaultBranch ? '' : ` Open it against the merge target with \`gh pr create --base ${target}\` (you branched off \`${m.defaultBranch}\` for freshness, but the PR must land on \`${target}\`).`;
+  return `You are implementing one GitHub issue in an isolated git worktree, in a fresh context, with no human available. Take it from plan to an open, review-clean PR — do NOT merge; the orchestrator merges serially after you return.
 
 Issue #${node.issue} (repo ${m.repo}, base ${m.defaultBranch}). Plan:
 \`\`\`
@@ -426,13 +434,14 @@ Steps:
 1. Create a branch off fresh \`${m.defaultBranch}\` in your worktree.
 2. Implement the plan. Follow repo conventions (AGENTS.md/CLAUDE.md): regenerate generated files rather than hand-editing; write tests for new behavior; keep coverage above the repo bar.
 3. Run the repo's build + test suite. Tests must pass before you open a PR.
-4. Open a PR and push the branch. Conventional-commit title; the body has a Summary and a Test plan AND MUST include a \`Closes #${node.issue}\` line on its own line so the squash-merge auto-closes the sub-issue. Do not omit it — the orchestrator reconciles issue state afterward, but the closing keyword is what makes the common path self-closing.
+4. Open a PR and push the branch.${baseClause} Conventional-commit title; the body has a Summary and a Test plan AND MUST include a \`Closes #${node.issue}\` line on its own line so the squash-merge auto-closes the sub-issue. Do not omit it — the orchestrator reconciles issue state afterward, but the closing keyword is what makes the common path self-closing.
 5. Run a code-review pass on your own diff. A P0 is a correctness/security/data-loss/scope finding that must not merge. Fix and re-review if you can; if a P0 cannot be safely auto-fixed here, leave the PR open and report p0:true — do NOT signal ready_to_merge.
 6. Report the PR number/URL, branch, the files you actually changed, and your verdict.
 
 If you cannot reach green build + passing tests + clean review, report ready_to_merge:false with the cause rather than papering over it.
 
 Return structured output: { issue, ready_to_merge, p0, pr_number, pr_url, branch, changed_paths, cause }.`;
+};
 
 const mergePrompt = (m, built) => {
   const target = mergeTarget(m);
