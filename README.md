@@ -64,6 +64,15 @@ Or as a Claude Code plugin marketplace:
 /plugin marketplace add ALRubinger/craftwork-skills
 ```
 
+If you're *developing* the suite from a clone and want `/cw-*` to run your working tree (live edits, no publish step), symlink the skills into your Claude skills dir instead:
+
+```sh
+task link              # symlink every skills/* into ~/.claude/skills
+task link -- --dry-run # preview; --force replaces conflicting links
+```
+
+It's idempotent — re-run it after adding a skill so nothing goes stale. Use this on your authoring machine; use the marketplace on machines that only consume the suite (don't do both, or each skill loads twice).
+
 The Work-track skills (`cw-ship`, `cw-orchestrate`, `cw-sweep`, `cw-promote`) drive real merges via `gh`/`git` once you invoke them — `cw-ship` and `cw-orchestrate` are on-demand, and `cw-sweep` can optionally be put on a schedule. `cw-ship`, `cw-orchestrate`, and `cw-sweep` run hands-off to merge; `cw-promote` is the one operator-gated exception in the Work track — it lands a proven integration branch on `main` only after an explicit operator confirmation. Read each skill's `SKILL.md` before running it, and start with a dry run.
 
 ## Running the loops
