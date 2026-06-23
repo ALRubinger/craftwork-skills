@@ -2,7 +2,7 @@
 
 The work stage runs in a **no-human window**: N worktree subagents producing PRs that merge to the default branch with nobody watching. Merge safety is the set of guarantees that make that window safe (R14, R15, R16). The governing principle: **`main` advances deterministically, one merge at a time, and never absorbs an unexpected conflict, a P0, or a red/pending CI run.**
 
-> **Base vs. target.** Two roles, one branch in the common case (see `manifest-schema.md`). `base` here means the *freshness base* (`defaultBranch`): where work subagents branch off and where the next wave fetches fresh code. The *merge target* — the branch the squash-merge lands on and that the pre-merge `git merge-tree` check diffs the PR branch against — is `targetBranch`, which defaults to `defaultBranch`. When they differ (e.g. landing an umbrella's PRs on an integration branch), branch off `defaultBranch` for freshness but merge onto / merge-tree against `targetBranch`. The shell snippet below uses `base` for the merge-tree/merge target; substitute `targetBranch` when it is set.
+> **Base vs. target.** Two roles, one branch in the common case (see `manifest-schema.md`). `base` here means the *freshness base* (`defaultBranch`): where work subagents branch off and where the next wave fetches fresh code. The *merge target* — the branch the squash-merge lands on and that the pre-merge `git merge-tree` check diffs the PR branch against — is `targetBranch`, which defaults to `defaultBranch`. When they differ (e.g. landing an umbrella's PRs on an integration branch), branch off `defaultBranch` for freshness but merge onto / merge-tree against `targetBranch`. The shell snippet below makes this split explicit: `base` (the freshness base) is used for the fetch, and a distinct `target` (`${TARGET_BRANCH:-$DEFAULT_BRANCH}`) is the merge-tree/merge target. When `TARGET_BRANCH` is unset, `target == base` and the snippet is identical to the single-branch case.
 
 ## The six guarantees
 
@@ -36,15 +36,16 @@ Building in parallel preserves throughput; merging serially preserves determinis
 Run per eligible node, serially. Operates on the **remote** PR (the branch was pushed by the work subagent), so no worktree is needed.
 
 ```bash
-repo="$REPO"; base="$DEFAULT_BRANCH"; branch="$NODE_BRANCH"; pr="$NODE_PR"
+repo="$REPO"; base="$DEFAULT_BRANCH"; target="${TARGET_BRANCH:-$DEFAULT_BRANCH}"; branch="$NODE_BRANCH"; pr="$NODE_PR"
 
-# 1. Re-fetch fresh main + the PR branch.
-git fetch origin "$base" "$branch"
+# 1. Re-fetch the freshness base, the merge target, and the PR branch.
+#    (When TARGET_BRANCH is unset, target == base and this is the same fetch as before.)
+git fetch origin "$base" "$target" "$branch"
 
-# 2. Pre-merge conflict check against FRESH main (R14).
+# 2. Pre-merge conflict check against the FRESH merge target (R14).
 #    merge-tree exits non-zero / reports conflicts if the merge would conflict.
-if ! git merge-tree --write-tree --name-only "origin/$base" "origin/$branch" >/tmp/mt.out 2>&1; then
-    echo "HALT: pre-merge conflict for #$issue against fresh $base; re-queue (do not force-merge)"
+if ! git merge-tree --write-tree --name-only "origin/$target" "origin/$branch" >/tmp/mt.out 2>&1; then
+    echo "HALT: pre-merge conflict for #$issue against fresh $target; re-queue (do not force-merge)"
     # mark node stalled(cause="pre-merge conflict"); re-queue once, then halt + dependents if it recurs
     exit 0
 fi
