@@ -387,21 +387,32 @@ function mergeVerdict(m) {
 // ---------------------------------------------------------------------------
 // Role prompt builders (mirror references/subagent-roles.md & merge-safety.md).
 //
-// workPrompt, mergePrompt, and triagePrompt are BYTE-FOR-BYTE mirrors of
-// prompts.mjs (the tested canonical source); tests/mirror.test.mjs drift-guards
-// them. Base vs. target: `defaultBranch` is the freshness base (branch off /
-// fetch fresh); `targetBranch` (optional, defaults to `defaultBranch`) is the
-// merge target. With targetBranch absent or equal to defaultBranch, every
-// rendered string is byte-identical to the single-branch behavior.
+// planPrompt, workPrompt, mergePrompt, triagePrompt, and autofixPrompt are
+// BYTE-FOR-BYTE mirrors of prompts.mjs (the tested canonical source);
+// tests/mirror.test.mjs drift-guards them. Base vs. target: `targetBranch`
+// (optional, defaults to `defaultBranch`) is BOTH the merge target and the fork
+// base — plan/work/autofix fetch and branch off it, kept fresh from
+// `defaultBranch` by the Step 4.5 ensure. With targetBranch absent or equal to
+// `defaultBranch`, every rendered string is byte-identical to the single-branch
+// behavior.
 // ---------------------------------------------------------------------------
 
 // Resolve the merge target. `??` (not `||`) so an intentional empty string is
 // NOT silently replaced; only an absent targetBranch falls back to the base.
 const mergeTarget = (m) => m.targetBranch ?? m.defaultBranch;
 
-const planPrompt = (m, issue, briefText) => `You are planning a single GitHub sub-issue in a fresh context. You will NOT implement it; you produce a plan document and a file-ownership table.
+const planPrompt = (m, issue, briefText) => {
+  // Ground the plan in the branch the run actually builds on: the MERGE TARGET.
+  // On an integration-target run that branch already carries the accumulated work
+  // of earlier nodes, so a plan that reads it sees the real surface the work
+  // subagent will fork from. When target === defaultBranch this is the default
+  // branch — identical single-branch wording.
+  const target = mergeTarget(m);
+  return `You are planning a single GitHub sub-issue in a fresh context. You will NOT implement it; you produce a plan document and a file-ownership table.
 
 Issue: #${issue.number} — ${issue.title} (repo ${m.repo}, default branch ${m.defaultBranch}).
+
+Ground yourself in the code the work will fork from FIRST: \`git fetch origin ${target} -q\` and read the relevant files at \`origin/${target}\` HEAD (this is the branch the implementing subagent will branch off, so it already reflects any work earlier nodes have merged). Plan against that surface, not the launching worktree's HEAD.
 
 Readiness brief (the operator's resolved decisions and constraints — authoritative; do not re-litigate):
 \`\`\`
@@ -413,6 +424,7 @@ Apply senior-engineer planning discipline: state key decisions, break the work i
 Then enumerate the COMPLETE set of repo-relative paths your implementation will create or modify — source, generated, and test files. Be exhaustive and conservative: a path you will touch but omit becomes an undetected merge collision later. List a path even if only moderately sure. Do not list paths you are confident you will not touch.
 
 Return structured output: { issue, plan_markdown, ownership_paths }.`;
+};
 
 const reviewPrompt = (m, issue, planMarkdown, briefText) => `You are doc-reviewing an implementation plan in a fresh context. Judge whether the plan is fit to execute hands-off, with no human gate between here and merge.
 
@@ -452,7 +464,7 @@ const workPrompt = (m, node) => {
   // prompt is byte-identical to the single-branch behavior; when they differ,
   // `gh pr create` needs an explicit `--base ${target}` or it would target the
   // wrong branch (the squash-merge would then land the code on the wrong base).
-  const baseClause = target === m.defaultBranch ? '' : ` Open it against the merge target with \`gh pr create --base ${target}\` (you branched off \`${m.defaultBranch}\` for freshness, but the PR must land on \`${target}\`).`;
+  const baseClause = target === m.defaultBranch ? '' : ` Open it against the merge target with \`gh pr create --base ${target}\` (you branched off \`${target}\`, which is where the PR must land — it already carries the run's accumulated work, kept fresh from \`${m.defaultBranch}\`).`;
   return `You are implementing one GitHub issue in an isolated git worktree, in a fresh context, with no human available. Take it from plan to an open, review-clean PR — do NOT merge; the orchestrator merges serially after you return.
 
 Issue #${node.issue} (repo ${m.repo}, base ${m.defaultBranch}). Plan:
@@ -461,7 +473,7 @@ ${node.plan_markdown}
 \`\`\`
 
 Steps:
-1. Create a branch off fresh \`${m.defaultBranch}\` in your worktree.
+1. Create a branch off fresh \`${target}\` in your worktree.
 2. Implement the plan. Follow repo conventions (AGENTS.md/CLAUDE.md): regenerate generated files rather than hand-editing; write tests for new behavior; keep coverage above the repo bar.
 3. Run the repo's build + test suite. Tests must pass before you open a PR.
 4. Open a PR and push the branch.${baseClause} Conventional-commit title; the body has a Summary and a Test plan AND MUST include a \`Closes #${node.issue}\` line on its own line so the squash-merge auto-closes the sub-issue. Do not omit it — the orchestrator reconciles issue state afterward, but the closing keyword is what makes the common path self-closing.
@@ -563,19 +575,27 @@ ${JSON.stringify(
 
 Return structured output: { issue: ${tr.residual_issue}, parked: true }.`;
 
-const autofixPrompt = (m, tr) => `You are implementing ONLY a set of small, high-confidence cleanup fixes for cw-review-residual #${tr.residual_issue} (sub-issue #${tr.sub_issue}) in an isolated git worktree, headless, with no human. Do NOT merge; the orchestrator merges serially after you return.
+const autofixPrompt = (m, tr) => {
+  // Fork from and precheck against the MERGE TARGET — the branch this run builds
+  // on and where the autofix PR lands. On an integration-target run it carries the
+  // run's accumulated work (kept fresh from defaultBranch by the Step 4.5 ensure);
+  // checking freshness against defaultBranch would miss fixes that landed on the
+  // target. When target === defaultBranch this is the default branch — identical
+  // single-branch wording.
+  const target = mergeTarget(m);
+  return `You are implementing ONLY a set of small, high-confidence cleanup fixes for cw-review-residual #${tr.residual_issue} (sub-issue #${tr.sub_issue}) in an isolated git worktree, headless, with no human. Do NOT merge; the orchestrator merges serially after you return.
 
 Repo ${m.repo}, base ${m.defaultBranch}. Implement EXACTLY these triaged fixes and nothing more:
 \`\`\`json
 ${JSON.stringify(highConfidenceFixes(tr).map((f) => ({ title: f.title, fix_hint: f.fix_hint, rationale: f.rationale })), null, 2)}
 \`\`\`
 
-FRESHNESS PRE-CHECK — do this FIRST, before branching or writing any code. The triage that produced these fixes is a snapshot and may be stale: between triage and now, a parallel PR or another session can close the residual or land an equivalent fix on \`${m.defaultBranch}\`. Building a PR for already-done work burns a PR + CI cycle for nothing — this check prevents exactly that.
+FRESHNESS PRE-CHECK — do this FIRST, before branching or writing any code. The triage that produced these fixes is a snapshot and may be stale: between triage and now, a parallel PR or another session can close the residual or land an equivalent fix on \`${target}\`. Building a PR for already-done work burns a PR + CI cycle for nothing — this check prevents exactly that.
 - a. Confirm the residual is still OPEN: \`gh issue view ${tr.residual_issue} --repo ${m.repo} --json state,closedByPullRequestsReferences\`. If it is CLOSED, STOP: do not branch or open a PR; report ready_to_merge:false, cause "residual #${tr.residual_issue} already closed since triage".
-- b. \`git fetch origin ${m.defaultBranch} -q\`, then for each listed fix read the file(s) it would touch at fresh \`origin/${m.defaultBranch}\` HEAD and DROP any whose change is already present (an equivalent guard/test/code merged since triage — search for the symbol/test name, do not assume). If EVERY listed fix is already on \`${m.defaultBranch}\`, STOP: report ready_to_merge:false, cause "fixes already landed on ${m.defaultBranch} (equivalent work merged since triage)". Otherwise proceed with ONLY the fixes that are genuinely still needed.
+- b. \`git fetch origin ${target} -q\`, then for each listed fix read the file(s) it would touch at fresh \`origin/${target}\` HEAD and DROP any whose change is already present (an equivalent guard/test/code merged since triage — search for the symbol/test name, do not assume). If EVERY listed fix is already on \`${target}\`, STOP: report ready_to_merge:false, cause "fixes already landed on ${target} (equivalent work merged since triage)". Otherwise proceed with ONLY the fixes that are genuinely still needed.
 
 Steps:
-1. Branch off fresh \`${m.defaultBranch}\` in your worktree.
+1. Branch off fresh \`${target}\` in your worktree.
 2. Implement ONLY the listed fixes. Stay strictly in scope. If a "fix" turns out to be larger, ambiguous, or riskier than its description, SKIP it and record that in \`cause\` rather than expanding scope or guessing — a skipped fix is fine; an over-reaching one is not.
 3. Follow repo conventions (AGENTS.md/CLAUDE.md): regenerate generated files rather than hand-editing; add or extend tests for changed behavior; keep coverage above the repo bar. Run the build + test suite; tests must pass before you open a PR.
 4. Open a PR. Conventional-commit title (\`fix\`/\`test\`/\`docs\`/\`chore\` scope as fits). Body: Summary + Test plan. ${closeDisposition(tr) === 'close-via-autofix' ? `Include \`Closes #${tr.residual_issue}\` on its own line — these fixes resolve every remaining actionable finding.` : `Include \`Relates to #${tr.residual_issue}\` on its own line. Do NOT close it: unresolved DECISION/low-confidence findings remain for a human.`} Push the branch.
@@ -585,6 +605,7 @@ Steps:
 If you cannot reach green build + passing tests + clean review, report ready_to_merge:false with the cause rather than papering over it.
 
 Return structured output: { issue, ready_to_merge, p0, pr_number, pr_url, branch, changed_paths, cause }.`;
+};
 
 // ---------------------------------------------------------------------------
 // Orchestration body
