@@ -14,22 +14,29 @@ The work stage runs in a **no-human window**: N worktree subagents producing PRs
 
 4. **P0 code-review halt (R15).** The work role runs a code-review pass on its own diff. A P0 finding leaves the PR **open** and marks the node stalled — it never merges. Non-P0 findings file-and-proceed.
 
-5. **Dependents rebase on the fresh merge target (R16).** Because waves run in order, a node in wave N+1 is built against the merge target that already contains wave N's merges. Within the serial merge loop, each merge advances the target; the next wave's work subagents fork off the new target tip (which is `main` in the single-branch case, `integration/<slug>` on a target run). A dependent that hits a conflict it cannot safely auto-resolve in a headless context → **halt the job and its dependents and file an issue** (no force-resolve).
+5. **Dependents plan AND build on the fresh merge target (R16).** Execution is **per-node gated**, not barrier-waved: a node's whole chain (plan → work → merge) defers until every predecessor has merged onto the target. So a dependent both *plans* and *builds* against a target that already carries its prerequisites' merged code — it is never planned blind, up front, against a surface its prerequisite hasn't landed on yet. Each merge advances the target; eligible dependents then fork off the new tip (which is `main` in the single-branch case, `integration/<slug>` on a target run). A dependent that hits a conflict it cannot safely auto-resolve in a headless context → **halt the job and its dependents and file an issue** (no force-resolve).
 
 6. **No force-resolve, ever (R16).** A headless context must not pick a side of a conflict. Unresolvable rebase/merge conflicts halt; they do not get `-X ours`/`-X theirs`'d away.
 
-## Wave + serial-merge structure
+## Per-node gating + serial-merge structure
+
+Execution is driven by a continuous eligibility check, not a fixed sequence of barrier waves. `eligible(nodes, merged)` (the pure scheduler, canonical in `scheduler.mjs`, mirrored into `workflow.js`) returns every not-yet-merged node whose predecessors (declared `depends_on` ∪ file-overlap) are all merged. The driver fires those nodes' chains in parallel; each merge advances the merged set and unblocks the next eligible nodes.
 
 ```
-for each wave (in order):
-    built = parallel( work-subagent per node in wave )      # isolated worktrees, build+PR+self-review
-    for each node in built (serially, in a stable order):    # ← the merge lock
-        if node halted/stalled by build (ready_to_merge=false or p0): record + halt dependents; continue
-        merge-step(node)                                     # pre-merge check → gh pr merge → verify
-    # wave fully merged before the next wave's subagents fork off the merge target
+merged = {}
+loop until no node can advance:
+    cascade-stalls()                                        # a stalled/P0 node halts its transitive dependents
+    planEligible  = eligible(nodes, merged)  restricted to declared-dep edges, not yet planned
+    plan+review+file-residual(planEligible) in parallel     # dependents plan AFTER prereqs merge → never blind
+    workEligible  = eligible(planned-nodes, merged)         # full edge model: declared deps ∪ file-overlap
+    built = parallel( work-subagent per workEligible node ) # isolated worktrees, build+PR+self-review
+    for each node in built (serially, ascending):           # ← the merge lock
+        if halted/stalled by build (ready_to_merge=false or p0): record + halt dependents; continue
+        merge-step(node)                                    # pre-merge check → gh pr merge → verify
+        on merge: merged += node                            # the next loop pass re-evaluates eligibility
 ```
 
-Building in parallel preserves throughput; merging serially preserves determinism. A wave is fully merged before the next wave starts, so dependents always build on merged prerequisites.
+Planning is gated on **declared deps only** — file-overlap is a merge-contention concern, not a plan-correctness one, so two file-overlapping nodes may plan concurrently; their contention is caught at merge time by the serial merge lock + pre-merge `git merge-tree` check. Eligible nodes plan and build **in parallel** (throughput); merges run **serially** (determinism). A node never starts until its prerequisites have merged, so dependents always plan and build on merged prerequisites.
 
 ## The merge step
 
@@ -124,13 +131,13 @@ A node is **stalled** only when it did **not** land, with a recorded cause:
 - Pre-merge conflict that re-queue did not clear → stalled (`cause: "pre-merge conflict against main"`).
 - PR closed-not-merged → stalled (a closed PR is not a merge).
 
-**A cancelled post-merge run is NOT a stall** (and, post-gate, not even a warning unless it masks a real failure). On an active default branch, GitHub Actions `concurrency: cancel-in-progress` cancels a commit's CI run the moment a later commit lands — the next serialized node, or an unrelated bot PR such as Renovate. A cancellation is not a failure: treating "not green" (which includes `cancelled`) as a failure falsely stalls a cleanly-merged node and cascade-halts its dependents. This exact false stall happened on a real run (#1050: #1051 merged clean, its post-merge CI was cancelled by a Renovate merge, and #1052/#1053 were wrongly halted). `classifyPostMergeCI` exists to prevent it: only an actual failing conclusion — confirmed against the default-branch tip when the merge commit's own run was cancelled — counts as `failed`. A still-`pending` run likewise does not stall (the next wave builds and full-tests on fresh `main`, which catches a real regression).
+**A cancelled post-merge run is NOT a stall** (and, post-gate, not even a warning unless it masks a real failure). On an active default branch, GitHub Actions `concurrency: cancel-in-progress` cancels a commit's CI run the moment a later commit lands — the next serialized node, or an unrelated bot PR such as Renovate. A cancellation is not a failure: treating "not green" (which includes `cancelled`) as a failure falsely stalls a cleanly-merged node and cascade-halts its dependents. This exact false stall happened on a real run (#1050: #1051 merged clean, its post-merge CI was cancelled by a Renovate merge, and #1052/#1053 were wrongly halted). `classifyPostMergeCI` exists to prevent it: only an actual failing conclusion — confirmed against the default-branch tip when the merge commit's own run was cancelled — counts as `failed`. A still-`pending` run likewise does not stall (the next eligible node builds and full-tests on fresh `main`, which catches a real regression).
 
 ## Failure cascade (R17)
 
-A stalled node halts its **transitive dependents** in the dependency graph (the same edges the scheduler used: declared `depends_on` ∪ file-overlap). Independents are unaffected and run to completion. The orchestrator skips halted dependents — it does not start them — and records each in the report with its cause.
+A stalled node — or a P0-halted node — halts its **transitive dependents** in the dependency graph (the same edges the scheduler used: declared `depends_on` ∪ file-overlap). Independents are unaffected and run to completion. Because the chain is per-node gated, a halted predecessor stops its dependents **from ever planning, not just from working**: a dependent whose prerequisite halted never reaches the plan gate, so the run does not waste a plan/review cycle on work that can never land. The orchestrator skips halted dependents — it neither plans nor starts them — and records each in the report with its cause.
 
-This is the whole point of the no-human-gate design having teeth: a failed linchpin (e.g. #981) cleanly stops #984/#985/#986 and lets #980/#982/#983/#987/#988 finish, rather than building dependents on a foundation that never landed.
+This is the whole point of the no-human-gate design having teeth: a failed linchpin (e.g. #981) cleanly stops #984/#985/#986 — none of them even plan — and lets #980/#982/#983/#987/#988 finish, rather than planning or building dependents on a foundation that never landed.
 
 ## Re-queue policy
 

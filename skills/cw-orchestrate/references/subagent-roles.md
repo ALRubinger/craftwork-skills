@@ -134,7 +134,7 @@ gh issue create \
 
 **Purpose:** Take one scheduled node from plan to a merged PR, in an isolated worktree, under the full merge-safety contract.
 
-**Dispatch:** `agent(workPrompt(node), { isolation: 'worktree', schema: BUILD_SCHEMA, phase: 'Work' })`. The `isolation: 'worktree'` gives the subagent its own working tree so parallel nodes in a wave don't corrupt each other's index.
+**Dispatch:** `agent(workPrompt(node), { isolation: 'worktree', schema: BUILD_SCHEMA, phase: 'Work' })`. The `isolation: 'worktree'` gives the subagent its own working tree so nodes building in parallel don't corrupt each other's index.
 
 **The work role does NOT merge.** It implements, opens the PR, and runs a code-review pass, then returns. The Workflow performs the actual merge **serially** in a separate step (see `merge-safety.md`) so only one node merges to the default branch at a time.
 

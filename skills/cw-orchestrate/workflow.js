@@ -16,14 +16,14 @@
 export const meta = {
   name: 'cw-orchestrate',
   description:
-    'Take an umbrella issue’s sub-issues to merged PRs: plan + doc-review each in parallel, schedule by declared deps and file-overlap, then work each node in wave order through a serialized, safety-gated squash-merge.',
+    'Take an umbrella issue’s sub-issues to merged PRs: per-node gated chain (plan + doc-review + work) that fires each node once its predecessors have merged, scheduled by declared deps and file-overlap, through a serialized, safety-gated squash-merge.',
   whenToUse:
-    'After the cw-orchestrate readiness sweep, to run the hands-off plan/review/schedule/work pipeline over a manifest.',
+    'After the cw-orchestrate readiness sweep, to run the hands-off per-node plan/review/schedule/work pipeline over a manifest.',
   phases: [
-    { title: 'Plan', detail: 'plan subagent per ready issue (parallel) -> plan + ownership table' },
-    { title: 'Review', detail: 'doc-review per plan; P0 halts the sub-issue; residuals filed' },
-    { title: 'Schedule', detail: 'declared deps + file-overlap -> ordered waves (pure)' },
-    { title: 'Work', detail: 'work subagent per node in wave order (isolated worktree) -> PR' },
+    { title: 'Plan', detail: 'plan subagent per node once its deps merged (parallel) -> plan + ownership table' },
+    { title: 'Review', detail: 'doc-review per plan; P0 halts the sub-issue + dependents (skip planning); residuals filed' },
+    { title: 'Schedule', detail: 'declared deps + file-overlap -> per-node eligibility as merges land (pure)' },
+    { title: 'Work', detail: 'work subagent per eligible node (isolated worktree) -> PR' },
     { title: 'Merge', detail: 'serialized pre-merge merge-tree check -> squash-merge -> verify' },
     { title: 'Triage', detail: 'per merged node: classify its residual vs shipped code; close what is resolved/moot' },
     { title: 'Autofix', detail: 'final sweep: high-confidence FIX_NOW findings -> PR -> serial merge' },
@@ -226,6 +226,44 @@ function computeWaves(nodes) {
     waves.push(wave);
   }
   return waves;
+}
+
+function eligible(nodes, merged) {
+  const mergedSet = new Set(merged);
+  const ids = nodes.map((n) => n.issue).sort((a, b) => a - b);
+  const byId = new Map(nodes.map((n) => [n.issue, n]));
+
+  // Directed edges as a Set of "a->b" strings (a must land before b).
+  const edges = new Set();
+  const addEdge = (a, b) => {
+    if (a !== b) edges.add(`${a}->${b}`);
+  };
+  for (const n of nodes) {
+    for (const dep of n.depends_on || []) {
+      if (byId.has(dep)) addEdge(dep, n.issue);
+    }
+  }
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const a = ids[i];
+      const b = ids[j];
+      const pa = byId.get(a).ownership_paths || [];
+      const pb = byId.get(b).ownership_paths || [];
+      if (!pa.some((p) => pb.includes(p))) continue;
+      if (edges.has(`${a}->${b}`) || edges.has(`${b}->${a}`)) continue;
+      addEdge(a, b);
+    }
+  }
+
+  // A node is eligible iff it is not already merged and every predecessor is.
+  const predecessorsMerged = (id) => {
+    for (const e of edges) {
+      const [src, dst] = e.split('->').map(Number);
+      if (dst === id && !mergedSet.has(src)) return false;
+    }
+    return true;
+  };
+  return ids.filter((id) => !mergedSet.has(id) && predecessorsMerged(id));
 }
 
 function transitiveDependents(nodes, halted) {
@@ -651,97 +689,55 @@ const briefs = await parallel(
 );
 const briefText = new Map((briefs.filter(Boolean)).map((b) => [b.issue, b.brief_text]));
 
-// Plan -> Review -> (file residual) as a pipeline: each issue flows through
-// independently, so a fast plan reviews while a slow plan is still planning.
-const reviewed = await pipeline(
-  manifest.issues,
-  // Stage 1: plan.
-  (it) =>
-    agent(planPrompt(manifest, it, briefText.get(it.number) || 'MISSING BRIEF'), {
-      label: `plan:${it.number}`,
-      phase: 'Plan',
-      schema: OWNERSHIP_SCHEMA,
-    }).then((plan) => ({ ...it, ...plan })),
-  // Stage 2: doc-review.
-  (node, it) =>
-    agent(reviewPrompt(manifest, it, node.plan_markdown, briefText.get(it.number) || ''), {
-      label: `review:${it.number}`,
-      phase: 'Review',
-      schema: REVIEW_SCHEMA,
-    }).then((verdict) => ({ ...node, p0: verdict.p0, residuals: verdict.residuals })),
-  // Stage 3: file residual issue when there are findings (P0 or not).
-  async (node, it) => {
-    if (!node.residuals || node.residuals.length === 0) return { ...node, residual_url: null };
-    const filed = await agent(fileResidualPrompt(manifest, it, node), {
-      label: `residual:${it.number}`,
-      phase: 'Review',
-      schema: FILED_SCHEMA,
-    });
-    return { ...node, residual_url: filed.residual_url };
-  },
-);
-
-const planned = reviewed.filter(Boolean);
-const residualsReport = planned
-  .filter((n) => n.residual_url)
-  .map((n) => ({ issue: n.issue, url: n.residual_url, p0: !!n.p0 }));
-
 // ---------------------------------------------------------------------------
-// Schedule (pure)
+// Per-node gated execution: each node's plan -> review -> file-residual -> work
+// -> merge defers until ALL its predecessors have MERGED onto the target. Unlike
+// the old plan-all-up-front + barrier-wave model, a same-run dependent now plans
+// AGAINST its prerequisite's merged output (the planPrompt forks origin/<target>,
+// which the prerequisite has already landed on by the time the dependent fires).
+// Eligible nodes plan + work in PARALLEL; only the merge step is serialized (the
+// merge lock — one PR touches the target at a time). The pure scheduler stays
+// canonical: `eligible(nodes, merged)` mirrors `computeWaves`'s edge model and
+// answers "which not-yet-merged node has every predecessor merged?".
 // ---------------------------------------------------------------------------
-phase('Schedule');
 
-// Nodes for the graph carry their declared deps (from the manifest) and the
-// predicted ownership paths (from the plan stage).
+// Declared deps from the manifest. File-overlap edges are discovered later from
+// the plans' ownership tables; declared deps are the only edges known up front,
+// so they alone gate PLANNING (planning is read-only — two nodes may plan even if
+// they will contend on a file; that contention is a MERGE concern caught by the
+// serial merge lock + pre-merge merge-tree check).
 const declaredDepsByIssue = new Map(manifest.issues.map((it) => [it.number, it.depends_on || []]));
-const graphNodes = planned.map((n) => ({
-  issue: n.issue,
-  ownership_paths: n.ownership_paths || [],
-  depends_on: declaredDepsByIssue.get(n.issue) || [],
+const issueByNumber = new Map(manifest.issues.map((it) => [it.number, it]));
+
+// Up-front cycle / unknown-target validation of the declared-dep graph, matching
+// Step 3's promise (the scheduler re-checks, but catch it before any work fires).
+// File-overlap never forms a cycle (oriented lower-issue-first), so the declared
+// graph is the only cycle source; computeWaves throws on a cycle or unknown dep.
+const declaredNodes = manifest.issues.map((it) => ({
+  issue: it.number,
+  ownership_paths: [],
+  depends_on: declaredDepsByIssue.get(it.number) || [],
 }));
-
-// P0-halted sub-issues are withheld from scheduling; their dependents cascade.
-const p0Halted = planned.filter((n) => n.p0).map((n) => n.issue);
-const haltedSet = transitiveDependents(graphNodes, p0Halted);
-
-const liveNodes = graphNodes.filter((n) => !haltedSet.has(n.issue));
-const planByIssue = new Map(planned.map((n) => [n.issue, n]));
-
-let waves = [];
 let scheduleError = null;
 try {
-  waves = computeWaves(liveNodes);
+  computeWaves(declaredNodes);
 } catch (e) {
   scheduleError = String(e && e.message ? e.message : e);
   log(`Schedule failed: ${scheduleError}`);
 }
 
-// Status tracking for the report.
+// Mutable run state. `planned` accumulates planned nodes (with ownership_paths,
+// p0, residuals, residual_url); `status` records terminal merged/stalled; the
+// merged set drives both gates.
+const planByIssue = new Map(); // issue -> planned node
 const status = new Map(); // issue -> { state: 'merged'|'stalled', pr?, cause? }
-for (const issue of haltedSet) {
-  if (p0Halted.includes(issue)) {
-    status.set(issue, { state: 'stalled', cause: 'P0 plan review finding; withheld pending operator triage' });
-  } else {
-    status.set(issue, { state: 'stalled', cause: `dependency halted (depends on a P0-halted sub-issue)` });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Work + serialized merge, wave by wave
-// ---------------------------------------------------------------------------
-phase('Work');
-
-const isStalled = (issue) => status.get(issue)?.state === 'stalled';
-const prereqStalled = (node) => {
-  // a node is blocked if any of its declared deps OR overlapping predecessors stalled
-  const deps = node.depends_on || [];
-  return deps.some((d) => isStalled(d));
-};
+const mergedSet = new Set(); // issues merged onto the target
+const startedPlan = new Set(); // issues whose plan chain has been dispatched
 
 // In-run triage: the moment a node merges, its residual can be re-judged against
 // the now-shipped code. Fire triage WITHOUT awaiting it here so it does not hold
 // the merge lock; each triage only reads its own merged diff, so it is safe to
-// run concurrently with later merges. Collected and awaited after all waves.
+// run concurrently with later work/merges. Collected and awaited after the loop.
 const triagePromises = [];
 const triageOne = (subIssue, residualUrl, prUrl) =>
   agent(triagePrompt(manifest, subIssue, residualUrl, prUrl), {
@@ -750,70 +746,153 @@ const triageOne = (subIssue, residualUrl, prUrl) =>
     schema: TRIAGE_SCHEMA,
   });
 
-for (const wave of waves) {
-  // Filter out nodes whose prerequisites already stalled (failure cascade R17).
-  const runnable = [];
-  for (const issue of wave) {
-    const node = liveNodes.find((n) => n.issue === issue);
-    if (prereqStalled(node)) {
-      status.set(issue, { state: 'stalled', cause: 'dependency failed to merge; not started' });
-      continue;
-    }
-    runnable.push(issue);
-  }
-  if (runnable.length === 0) continue;
+const isTerminal = (issue) => status.has(issue); // merged or stalled
 
-  // Build in parallel (isolated worktrees), then merge serially.
-  const built = await parallel(
-    runnable.map((issue) => () =>
-      agent(workPrompt(manifest, planByIssue.get(issue)), {
-        label: `work:${issue}`,
-        phase: 'Work',
-        isolation: 'worktree',
-        schema: BUILD_SCHEMA,
-      }),
-    ),
+// Plan -> review -> file-residual for one issue (the deferred head of its chain).
+const planChain = async (it) => {
+  const plan = await agent(planPrompt(manifest, it, briefText.get(it.number) || 'MISSING BRIEF'), {
+    label: `plan:${it.number}`,
+    phase: 'Plan',
+    schema: OWNERSHIP_SCHEMA,
+  });
+  let node = { ...it, ...plan };
+  const verdict = await agent(
+    reviewPrompt(manifest, it, node.plan_markdown, briefText.get(it.number) || ''),
+    { label: `review:${it.number}`, phase: 'Review', schema: REVIEW_SCHEMA },
   );
+  node = { ...node, p0: verdict.p0, residuals: verdict.residuals };
+  if (node.residuals && node.residuals.length > 0) {
+    const filed = await agent(fileResidualPrompt(manifest, it, node), {
+      label: `residual:${it.number}`,
+      phase: 'Review',
+      schema: FILED_SCHEMA,
+    });
+    node = { ...node, residual_url: filed.residual_url };
+  } else {
+    node = { ...node, residual_url: null };
+  }
+  return node;
+};
 
-  // Serial merge loop = the merge lock. One node merges at a time.
-  for (const b of built.filter(Boolean).sort((x, y) => x.issue - y.issue)) {
-    if (!b.ready_to_merge || b.p0) {
-      status.set(b.issue, {
-        state: 'stalled',
-        cause: b.p0 ? 'P0 code-review on the diff; PR left open' : b.cause || 'build did not reach a mergeable state',
-        pr: b.pr_url || null,
-      });
+// Merge one already-built node (serialized — only ever called one at a time).
+const mergeOne = async (b) => {
+  if (!b.ready_to_merge || b.p0) {
+    status.set(b.issue, {
+      state: 'stalled',
+      cause: b.p0 ? 'P0 code-review on the diff; PR left open' : b.cause || 'build did not reach a mergeable state',
+      pr: b.pr_url || null,
+    });
+    return;
+  }
+  const m = await agent(mergePrompt(manifest, b), {
+    label: `merge:${b.issue}`,
+    phase: 'Merge',
+    schema: MERGE_SCHEMA,
+  });
+  const v = mergeVerdict(m);
+  if (v.state === 'merged') {
+    // The PR landed (pre-merge CI gated it green). A genuine post-merge
+    // regression rides along as a warning; it does not stall the node or halt
+    // dependents (the code is already on the target).
+    mergedSet.add(b.issue);
+    status.set(b.issue, { state: 'merged', pr: b.pr_url || null, postMergeWarning: v.postMergeWarning });
+    log(`#${b.issue} merged.${v.postMergeWarning ? ` (post-merge CI flagged: ${v.postMergeWarning})` : ''}`);
+    const residualUrl = planByIssue.get(b.issue)?.residual_url;
+    if (residualUrl) triagePromises.push(triageOne(b.issue, residualUrl, b.pr_url || null));
+  } else {
+    // Did NOT land: pre-merge conflict, a failing blocking check, or a gate
+    // timeout. A true stall for the operator.
+    status.set(b.issue, { state: 'stalled', cause: v.cause, pr: b.pr_url || null });
+    log(`#${b.issue} stalled: ${v.cause}`);
+  }
+};
+
+// The driver loop. Each pass: (1) cascade stalls to dependents, (2) plan every
+// newly plan-eligible node in parallel, (3) work every work-eligible planned node
+// in parallel, (4) merge the built nodes serially. Repeat until nothing more can
+// advance. A pass that does no work breaks the loop (guards against a stuck graph).
+if (!scheduleError) {
+  for (;;) {
+    // (1) Cascade: any node whose plan flagged a P0, or that stalled in build/
+    //     merge, halts its transitive dependents — which now SKIP PLANNING too,
+    //     not just work. Seeds = P0-reviewed planned nodes ∪ stalled nodes; the
+    //     edge model uses the ownership paths known so far (planned nodes).
+    const knownNodes = manifest.issues.map((it) => ({
+      issue: it.number,
+      ownership_paths: planByIssue.get(it.number)?.ownership_paths || [],
+      depends_on: declaredDepsByIssue.get(it.number) || [],
+    }));
+    const p0Seeds = [...planByIssue.values()].filter((n) => n.p0).map((n) => n.issue);
+    const stalledSeeds = [...status.entries()].filter(([, s]) => s.state === 'stalled').map(([i]) => i);
+    const haltedSet = transitiveDependents(knownNodes, [...new Set([...p0Seeds, ...stalledSeeds])]);
+    for (const issue of haltedSet) {
+      if (isTerminal(issue)) continue;
+      const planNode = planByIssue.get(issue);
+      if (planNode && planNode.p0) {
+        status.set(issue, { state: 'stalled', cause: 'P0 plan review finding; withheld pending operator triage' });
+      } else {
+        status.set(issue, { state: 'stalled', cause: 'dependency halted (depends on a halted/stalled sub-issue); not started' });
+      }
+    }
+
+    // (2) PLAN gate: declared-dep predecessors merged ⇒ eligible to plan. Strip
+    //     ownership paths so only declared-dep edges apply (file-overlap doesn't
+    //     gate read-only planning). Skip terminal/halted/already-started nodes.
+    const planEligible = eligible(declaredNodes, mergedSet).filter(
+      (issue) => !isTerminal(issue) && !startedPlan.has(issue),
+    );
+    if (planEligible.length > 0) {
+      for (const issue of planEligible) startedPlan.add(issue);
+      const newlyPlanned = await parallel(
+        planEligible.map((issue) => () => planChain(issueByNumber.get(issue))),
+      );
+      for (const n of newlyPlanned.filter(Boolean)) planByIssue.set(n.issue, n);
+      // A freshly-planned P0 halts dependents on the NEXT pass (cascade above).
       continue;
     }
-    const m = await agent(mergePrompt(manifest, b), {
-      label: `merge:${b.issue}`,
-      phase: 'Merge',
-      schema: MERGE_SCHEMA,
-    });
-    const v = mergeVerdict(m);
-    if (v.state === 'merged') {
-      // The PR landed (pre-merge CI gated it green). A genuine post-merge
-      // regression rides along as a warning; it does not stall the node or halt
-      // dependents (the code is already on main).
-      status.set(b.issue, { state: 'merged', pr: b.pr_url || null, postMergeWarning: v.postMergeWarning });
-      log(`#${b.issue} merged.${v.postMergeWarning ? ` (post-merge CI flagged: ${v.postMergeWarning})` : ''}`);
-      const residualUrl = planByIssue.get(b.issue)?.residual_url;
-      if (residualUrl) triagePromises.push(triageOne(b.issue, residualUrl, b.pr_url || null));
-    } else {
-      // Did NOT land: pre-merge conflict, a failing blocking check, or a gate
-      // timeout. A true stall for the operator.
-      status.set(b.issue, { state: 'stalled', cause: v.cause, pr: b.pr_url || null });
-      log(`#${b.issue} stalled: ${v.cause}`);
+
+    // (3) WORK gate: full edge model (declared deps ∪ file-overlap) over the
+    //     known nodes — declared-dep predecessors that are not yet planned still
+    //     block (their edge persists with empty paths); file-overlap among
+    //     planned nodes serializes known contenders. Eligible ⇒ planned, not
+    //     terminal/halted, not already built.
+    const workEligible = eligible(knownNodes, mergedSet).filter(
+      (issue) => planByIssue.has(issue) && !isTerminal(issue) && !haltedSet.has(issue),
+    );
+    if (workEligible.length === 0) break; // nothing left to advance
+
+    phase('Work');
+    const built = await parallel(
+      workEligible.map((issue) => () =>
+        agent(workPrompt(manifest, planByIssue.get(issue)), {
+          label: `work:${issue}`,
+          phase: 'Work',
+          isolation: 'worktree',
+          schema: BUILD_SCHEMA,
+        }),
+      ),
+    );
+
+    // (4) Serial merge loop = the merge lock. One node merges at a time, in a
+    //     stable ascending order. A merge advances mergedSet, unblocking gated
+    //     dependents on the next pass.
+    for (const b of built.filter(Boolean).sort((x, y) => x.issue - y.issue)) {
+      await mergeOne(b);
     }
-  }
-  // Any built node we did not explicitly merge/stall (e.g. dropped to null) → stalled.
-  for (const issue of runnable) {
-    if (!status.has(issue)) status.set(issue, { state: 'stalled', cause: 'work subagent returned no result' });
+    // Any work-eligible node whose subagent returned nothing → stalled.
+    for (const issue of workEligible) {
+      if (!isTerminal(issue)) status.set(issue, { state: 'stalled', cause: 'work subagent returned no result' });
+    }
   }
 }
 
+const planned = [...planByIssue.values()];
+const residualsReport = planned
+  .filter((n) => n.residual_url)
+  .map((n) => ({ issue: n.issue, url: n.residual_url, p0: !!n.p0 }));
+
 // ---------------------------------------------------------------------------
-// Triage — collect the per-node triage results fired during the merge waves.
+// Triage — collect the per-node triage results fired as each node merged.
 // Each classified its residual against the shipped code and closed the ones with
 // nothing actionable left (close-now); residuals with remaining work stay open.
 // ---------------------------------------------------------------------------
@@ -926,10 +1005,12 @@ for (const [issue, s] of [...status.entries()].sort((a, b) => a[0] - b[0])) {
   if (s.state === 'merged') report.merged.push({ issue, pr: s.pr || null, post_merge_warning: s.postMergeWarning || null });
   else report.stalled.push({ issue, cause: s.cause || 'unknown', pr: s.pr || null });
 }
-// Any planned-but-untracked node that was never halted/built (e.g. schedule error) → stalled.
-for (const n of planned) {
-  if (!status.has(n.issue)) {
-    report.stalled.push({ issue: n.issue, cause: scheduleError ? 'not scheduled (schedule error)' : 'not processed', pr: null });
+// Any manifest issue that never reached a terminal state (e.g. a declared-dep
+// cycle stopped the loop before it could fire) → stalled, so the report accounts
+// for every sub-issue in scope.
+for (const it of manifest.issues) {
+  if (!status.has(it.number)) {
+    report.stalled.push({ issue: it.number, cause: scheduleError ? 'not scheduled (schedule error)' : 'not processed', pr: null });
   }
 }
 

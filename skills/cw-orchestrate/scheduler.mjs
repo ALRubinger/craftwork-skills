@@ -86,6 +86,66 @@ export function computeWaves(nodes) {
 }
 
 /**
+ * Nodes eligible to advance given a set of already-MERGED issues.
+ *
+ * Same edge model as `computeWaves` (logical `depends_on` ∪ file-overlap,
+ * lower-issue-first), but instead of layering the whole graph up front it answers
+ * a runtime question: which not-yet-merged nodes have ALL their predecessors
+ * already merged? Those — and only those — may fire their plan→work→merge chain
+ * right now; everything else waits for a predecessor to land.
+ *
+ * This is what makes execution per-node rather than per-barrier: a node fires the
+ * instant its own predecessors merge, regardless of slow unrelated siblings.
+ *
+ * The plan gate calls this with ownership_paths stripped (file-overlap is a
+ * merge-contention concern, not a plan-correctness one, and a dependent's paths
+ * aren't known until it is planned), so only `depends_on` edges apply; the
+ * work/merge gate calls it with the planned nodes' real ownership_paths so the
+ * full edge model applies. The function itself is agnostic to which.
+ *
+ * @param {{issue:number, ownership_paths?:string[], depends_on?:number[]}[]} nodes
+ * @param {Iterable<number>} merged issue numbers already merged onto the target
+ * @returns {number[]} not-yet-merged issues whose every predecessor is merged (ascending)
+ */
+export function eligible(nodes, merged) {
+  const mergedSet = new Set(merged);
+  const ids = nodes.map((n) => n.issue).sort((a, b) => a - b);
+  const byId = new Map(nodes.map((n) => [n.issue, n]));
+
+  // Directed edges as a Set of "a->b" strings (a must land before b).
+  const edges = new Set();
+  const addEdge = (a, b) => {
+    if (a !== b) edges.add(`${a}->${b}`);
+  };
+  for (const n of nodes) {
+    for (const dep of n.depends_on || []) {
+      if (byId.has(dep)) addEdge(dep, n.issue);
+    }
+  }
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const a = ids[i];
+      const b = ids[j];
+      const pa = byId.get(a).ownership_paths || [];
+      const pb = byId.get(b).ownership_paths || [];
+      if (!pa.some((p) => pb.includes(p))) continue;
+      if (edges.has(`${a}->${b}`) || edges.has(`${b}->${a}`)) continue;
+      addEdge(a, b);
+    }
+  }
+
+  // A node is eligible iff it is not already merged and every predecessor is.
+  const predecessorsMerged = (id) => {
+    for (const e of edges) {
+      const [src, dst] = e.split('->').map(Number);
+      if (dst === id && !mergedSet.has(src)) return false;
+    }
+    return true;
+  };
+  return ids.filter((id) => !mergedSet.has(id) && predecessorsMerged(id));
+}
+
+/**
  * Transitive dependents of a set of halted issues, over the same edge model the
  * scheduler uses (logical ∪ file-overlap). Used by the failure cascade: a
  * halted/stalled node halts everything reachable from it.

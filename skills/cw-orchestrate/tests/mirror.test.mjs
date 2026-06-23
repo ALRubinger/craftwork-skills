@@ -90,7 +90,7 @@ async function workflowBuilder(name) {
   return (await import(url))[name];
 }
 
-for (const fn of ['computeWaves', 'transitiveDependents']) {
+for (const fn of ['computeWaves', 'eligible', 'transitiveDependents']) {
   test(`workflow.js mirror of ${fn} matches scheduler.mjs`, () => {
     const canonical = normalize(extractFunction(schedulerSrc, fn));
     const mirror = normalize(extractFunction(workflowSrc, fn));

@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeWaves, transitiveDependents } from '../scheduler.mjs';
+import { computeWaves, eligible, transitiveDependents } from '../scheduler.mjs';
 
 // AE2: two issues sharing an ownership path land in different waves even with
 // no declared logical dependency.
@@ -103,4 +103,76 @@ test('transitiveDependents halts the linchpin subtree, not independents', () => 
   const halted = transitiveDependents(nodes, [981]);
   assert.deepEqual([...halted].sort((a, b) => a - b), [981, 984, 985, 986]);
   assert.ok(!halted.has(980), '#980 is independent and must not be halted');
+});
+
+// ---------------------------------------------------------------------------
+// eligible(nodes, merged): per-node firing. This is what makes the run plan +
+// work each node the instant ITS predecessors merge, instead of planning the
+// whole graph up front behind a barrier. Same edge model as computeWaves.
+// ---------------------------------------------------------------------------
+
+// A dependent is NOT eligible until its declared-dep predecessor has MERGED.
+// This is the core fix: a same-run dependent must defer (plan included) until its
+// prerequisite has landed on the target, so it plans against the merged output.
+test('eligible: a dependent is withheld until its depends_on predecessor has merged', () => {
+  const nodes = [
+    { issue: 981, ownership_paths: ['b.go'], depends_on: [] },
+    { issue: 984, ownership_paths: ['a.go'], depends_on: [981] },
+  ];
+  // Nothing merged: only the predecessor #981 may fire; #984 is gated.
+  assert.deepEqual(eligible(nodes, []), [981]);
+  assert.ok(!eligible(nodes, []).includes(984), '#984 must not fire before #981 merges');
+  // #981 merged: now #984 becomes eligible; the merged #981 is excluded.
+  assert.deepEqual(eligible(nodes, [981]), [984]);
+});
+
+// Per-node, NOT per-barrier: an independent node is not blocked by a slow,
+// unrelated sibling that happens to sit in an earlier topological layer. Under
+// the old wave model, #986 would wait for the whole of wave 1 (incl. the slow
+// linchpin #981) to merge; under per-node gating it fires immediately.
+test('eligible: an independent node is not blocked by an unrelated slow sibling', () => {
+  const nodes = [
+    // #981 is a slow linchpin with dependents; #986 is fully independent of it.
+    { issue: 981, ownership_paths: ['cmd/items.go'], depends_on: [] },
+    { issue: 984, ownership_paths: ['x.go'], depends_on: [981] },
+    { issue: 986, ownership_paths: ['solo.go'], depends_on: [] },
+  ];
+  const e = eligible(nodes, []);
+  assert.ok(e.includes(986), '#986 is independent and must fire without waiting on #981');
+  assert.ok(e.includes(981), '#981 (no predecessors) is also eligible');
+  assert.ok(!e.includes(984), '#984 depends on #981 and must wait');
+});
+
+// File-overlap with no declared dep still serializes: the lower-issue node fires
+// first; its overlapping sibling waits for it to merge (the same contention edge
+// computeWaves draws).
+test('eligible: file-overlap predecessor (no declared dep) gates the higher-issue sibling', () => {
+  const nodes = [
+    { issue: 10, ownership_paths: ['cmd/vault.go'], depends_on: [] },
+    { issue: 20, ownership_paths: ['cmd/vault.go'], depends_on: [] },
+  ];
+  assert.deepEqual(eligible(nodes, []), [10]); // lower-issue-first
+  assert.deepEqual(eligible(nodes, [10]), [20]); // 20 unblocks once 10 merges
+});
+
+// Already-merged nodes are never re-emitted as eligible.
+test('eligible: merged nodes are excluded from the eligible set', () => {
+  const nodes = [
+    { issue: 1, ownership_paths: ['x.go'], depends_on: [] },
+    { issue: 2, ownership_paths: ['y.go'], depends_on: [] },
+  ];
+  assert.deepEqual(eligible(nodes, [1, 2]), []);
+  assert.deepEqual(eligible(nodes, [1]), [2]);
+});
+
+// Stripping ownership_paths reduces the gate to declared deps only — exactly how
+// the PLAN gate is invoked (file-overlap is a merge-contention concern, not a
+// plan-correctness one, so two file-overlapping nodes may PLAN concurrently).
+test('eligible: with paths stripped, only declared deps gate (the plan gate)', () => {
+  const nodes = [
+    { issue: 10, ownership_paths: [], depends_on: [] },
+    { issue: 20, ownership_paths: [], depends_on: [] }, // would overlap #10 if paths present
+  ];
+  // No file-overlap edge ⇒ both plan-eligible together (no barrier between them).
+  assert.deepEqual(eligible(nodes, []), [10, 20]);
 });
