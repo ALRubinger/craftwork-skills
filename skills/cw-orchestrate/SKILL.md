@@ -16,7 +16,7 @@ metadata:
 
 Take a parent (umbrella) issue's open sub-issues from "open" to "merged PRs."
 
-The skill runs **one interactive readiness sweep** in the main session — the single human touchpoint — then writes a per-run **manifest** and launches a background **Claude Code Workflow** that plans, doc-reviews, schedules by dependency, and works each sub-issue through to a serialized, safety-gated squash-merge. After you say "go," no further human input is solicited until the run reports back. Once it does, the main session reconciles GitHub state — closing merged-but-open sub-issues, labeling any sub-issue the run left parked (`cw-status:stalled`/`cw-status:deferred`), and updating the parent issue so GitHub stays the source of truth (Step 7) — then cleans up its own worktrees and branches and heals the default-branch checkout (Step 8), so a completed run leaves both GitHub and the repo tidy.
+The skill runs **one interactive readiness sweep** in the main session — the single human touchpoint — then writes a per-run **manifest** and launches a background **Claude Code Workflow** that plans, doc-reviews, schedules by dependency, and works each sub-issue through to a serialized, safety-gated squash-merge. After you say "go," no further human input is solicited until the run reports back. Once it does, the main session reconciles GitHub state — closing merged-but-open sub-issues, labeling any sub-issue the run left parked (`cw-status:stalled`/`cw-status:deferred`), and updating the parent issue so GitHub stays the source of truth (Step 7) — then cleans up its own worktrees and branches and heals the checkout to the run's merge target (Step 8), so a completed run leaves both GitHub and the repo tidy. On an integration-target run (a `cw-target:<slug>` label on the umbrella) the PRs land on `integration/<slug>` instead of the default branch, the checkout heals to that branch, and the umbrella stays open for cw-promote (#39) rather than closing.
 
 This skill is umbrella-agnostic: it operates on any parent issue with sub-issues. #989 (agent-auth) is the first run, not a special case.
 
@@ -75,6 +75,28 @@ If `subIssues` is **empty** but the umbrella body still carries a `- [ ] #NNN` c
 
 Resolve each candidate to `{number, title, state}` and drop anything not `OPEN`. Closed sub-issues are excluded (R1). Then apply the scope filter: if `--only` is set, keep only those numbers (error if any named number is not an open sub-issue of the umbrella); if `--except` is set, drop those. Present the resulting in-scope set to the operator before sweeping, and state explicitly which sub-issues were excluded by scope so the run's blast radius is unambiguous.
 
+**Read the umbrella's merge target.** The `cw-target:<slug>` **label on the umbrella is the single source of truth** for where this run's PRs land (set by cw-scope; see its [integration-branch targeting convention](../cw-scope/references/issue-templates.md#integration-branch-targeting-cw-targetslug)). There is no body field and no per-sub-issue label — **sub-issues inherit the umbrella's target** (no duplicated state). Read the labels and derive the target with this skill's `target.mjs` (the single, tested slug→branch derivation):
+
+```bash
+# Single source of truth: the cw-target:<slug> label on the umbrella.
+mapfile -t labels < <(gh issue view "$umbrella" --json labels --jq '.labels[].name')
+# Derive { targetBranch, slug } from the labels (target.mjs encodes the rules):
+#   0 cw-target:* labels  -> { targetBranch: null }  (defaults to defaultBranch)
+#   1 cw-target:* label   -> integration/<slug>
+#   >1 cw-target:* labels -> abort (operator removes the extra label)
+#   empty/whitespace slug -> hard stop (never silently falls back)
+node -e 'import("./skills/cw-orchestrate/target.mjs").then(m => {
+  console.log(JSON.stringify(m.deriveTarget(process.argv.slice(1))));
+})' "${labels[@]}"
+```
+
+Surface the helper's errors to the operator **before** "go", and stop the sweep on either:
+
+- **Multiple `cw-target:*` labels** ⇒ abort with the helper's error (it names the conflicting labels). The operator removes the extra label and re-invokes — orchestrate does not guess which target was intended.
+- **Empty / whitespace-only slug** (`cw-target:` or `cw-target:   `) ⇒ hard-stop with the helper's error. Never silently fall back to `defaultBranch`; a malformed label is an operator mistake to fix, not a default to absorb.
+
+A clean derivation yields either `targetBranch: "integration/<slug>"` (label present) or `targetBranch: null` (label absent ⇒ the run lands on `defaultBranch`, behavior unchanged). Carry the derived `{ targetBranch, slug }` forward to Step 4 (manifest) and Step 4.5 (ensure the branch exists).
+
 ### Step 2: Run the interactive readiness sweep
 
 Follow [references/readiness-sweep.md](./references/readiness-sweep.md). For **each** open sub-issue, in order:
@@ -115,10 +137,59 @@ Write the manifest per [references/manifest-schema.md](./references/manifest-sch
 ```
 
 - `runId` and `timestamp` are generated **here, in the main session** (the Workflow forbids `Date.now()` / `Math.random()`; they arrive via `args`).
-- `targetBranch` is optional (omitted above): it defaults to `defaultBranch`. Set it only to land this umbrella's PRs on an integration/release branch while still branching off `defaultBranch` for freshness — see manifest-schema.md for the base-vs-target split.
+- `targetBranch` is optional (omitted above): it defaults to `defaultBranch`. Set it from the Step 1 derivation: when a `cw-target:<slug>` label was present, the derived `targetBranch` is `integration/<slug>`, so **write `targetBranch: "integration/<slug>"`** into the manifest; when the label was absent (`targetBranch: null`), **omit the field entirely** so the Workflow lands PRs on `defaultBranch`. Manifest invariant 5 (present ⇒ non-empty) is satisfied by construction — the empty/whitespace-slug case already hard-stopped in Step 1, so a present value is always a real branch name. See manifest-schema.md for the base-vs-target split.
+
+  A worked **integration-target** manifest (label `cw-target:agent-auth` present) carries the populated field:
+
+  ```json
+  {
+    "umbrella": 989,
+    "repo": "<owner>/<repo>",
+    "defaultBranch": "main",
+    "targetBranch": "integration/agent-auth",
+    "runId": "umbrella-989-20260611-1713",
+    "timestamp": "2026-06-11T17:13:00Z",
+    "issues": [
+      { "number": 981, "brief_path": "<abs path>/981.md", "depends_on": [] }
+    ]
+  }
+  ```
+
 - Briefs and the manifest live under a run-scoped working directory the background Workflow can read by absolute path (see manifest-schema.md for the location decision).
 
-Then get an explicit **"go"** from the operator (AskUserQuestion). This is the last human checkpoint (R4). Show the routed list, the dependency edges, and the manifest path before asking.
+Then get an explicit **"go"** from the operator (AskUserQuestion). This is the last human checkpoint (R4). Show the routed list, the dependency edges, the manifest path, and **the run's merge target** — `integration/<slug>` when a `cw-target:` label was derived, or "default branch (`<defaultBranch>`)" when absent — before asking, so the operator sees the run's blast radius (where PRs will land) before approving.
+
+### Step 4.5: Ensure the integration branch exists and is fresh (target runs only)
+
+**This runs only when a `targetBranch` was derived in Step 1** (a `cw-target:<slug>` label is present). On the label-absent path it is a **no-op** — there is no integration branch to ensure, and behavior is unchanged.
+
+The headless Workflow assumes the merge target already exists and is current: it branches work off fresh `defaultBranch`, but the pre-merge `git merge-tree` check and the squash-merge both target `integration/<slug>`. So the **main session** creates the branch if missing and refreshes it from `main` here, before launch. Honor [worktree-discipline](./references/worktree-discipline.md): never operate on the primary checkout's default branch directly — use a remote-ref push or a scratch worktree.
+
+The recipe is idempotent — safe to re-run on a resumed run:
+
+```bash
+# Only when a target was derived in Step 1:
+slug="agent-auth"                       # from Step 1
+target="integration/${slug}"
+
+git fetch origin main
+if [ -z "$(git ls-remote --heads origin "$target")" ]; then
+  # Missing: create it off fresh origin/main and push (no local checkout needed).
+  git push origin "refs/remotes/origin/main:refs/heads/${target}"
+else
+  # Exists: merge main in to keep the merge-tree base current. Do it on a
+  # scratch worktree so the primary checkout's branch is never touched.
+  git fetch origin "$target"
+  wt=".cw-orchestrate/refresh-${slug}"
+  git worktree add --force "$wt" "origin/${target}"
+  git -C "$wt" merge --ff-only "origin/main" \
+    || git -C "$wt" merge --no-edit "origin/main"   # real merge only if main diverged
+  git -C "$wt" push origin "HEAD:${target}"
+  git worktree remove --force "$wt"
+fi
+```
+
+If a real (non-fast-forward) merge of `main` into the integration branch hits a conflict, surface it to the operator before "go" — a stale integration branch with conflicts against `main` is an operator decision, not something to resolve unattended. State explicitly that the Workflow runs from its launch snapshot, so this ensure step must complete before Step 5.
 
 ### Step 5: Launch the Workflow
 
@@ -169,7 +240,9 @@ GitHub is the authoritative record of what work is done and still needs doing. T
 
    Create the two labels lazily on first use (`gh label create cw-status:stalled --color D93F0B …`, `cw-status:deferred --color FBCA04 …`). Then maintain the umbrella body's **residual** section only (it is not a sub-issue duplicate): a short dated **Status** line and a **Residual follow-ups** list, **each residual annotated with its triage disposition** — `closed (resolved/moot)`, `closed via PR #NNN` (close-via-autofix), `open — escalation: <one-line>` (keep-open, needs a human), or `deferred — feature not yet shipped`. This mirrors `cw-sweep`'s Step 4 so the in-band and out-of-band paths leave the residual section identically true. Apply body edits with `gh issue edit <umbrella> --body-file <file>` — a body-file (or quoted heredoc) preserves backticks; do not hand-escape.
 4. **Post a run-summary comment on the umbrella**: the merged / stalled / deferred table, residual links, and any production bug the shepherding surfaced.
-5. **Close the umbrella when it is fully done.** After sub-issue state is reconciled, if **every** in-scope sub-issue is resolved (merged or closed) **and** none carries `cw-status:deferred`/`cw-status:stalled` **and** no residual is left `open — escalation` (closed/moot/autofixed residuals are fine), close the umbrella itself: `gh issue close <umbrella> --reason completed --comment "All sub-issues and residuals resolved. <one-line outcome>"`. Otherwise leave it **open** — an umbrella whose sub-issues are all closed should close, but any sub-issue still open (parked or in flight) or a live escalation means it is still tracking work. Never close an umbrella that still carries unresolved items.
+5. **Close the umbrella when it is fully done — but never on an integration-target run.** When this run's `targetBranch` is an **integration branch** (a `cw-target:<slug>` label was derived), **do not close the umbrella** even if every sub-issue and residual is resolved. The PRs landed on `integration/<slug>`, not the default branch — the work is not yet in production. Closing the umbrella and promoting the integration branch is **cw-promote's job (#39)**; the umbrella stays **open**, tracking the integration branch until it is promoted. Do everything else in this step identically (close merged sub-issues, set status labels, post the run-summary comment) — only the umbrella-close decision branches.
+
+   When `targetBranch === defaultBranch` (label absent — the default path), the existing close logic is unchanged: after sub-issue state is reconciled, if **every** in-scope sub-issue is resolved (merged or closed) **and** none carries `cw-status:deferred`/`cw-status:stalled` **and** no residual is left `open — escalation` (closed/moot/autofixed residuals are fine), close the umbrella itself: `gh issue close <umbrella> --reason completed --comment "All sub-issues and residuals resolved. <one-line outcome>"`. Otherwise leave it **open** — an umbrella whose sub-issues are all closed should close, but any sub-issue still open (parked or in flight) or a live escalation means it is still tracking work. Never close an umbrella that still carries unresolved items.
 6. **Update the parent issue the umbrella names** (e.g. a `Parent: #747` line). If the parent has a checklist entry for the umbrella, flip it to `[x]` **only when every in-scope sub-issue is resolved** (nothing deferred or stalled remaining); otherwise leave it unchecked and post a progress comment so the milestone reflects partial completion. Never mark a parent line done while the umbrella still carries open deferred/stalled items.
 7. **Update sub-issue descriptions that diverged from what shipped.** When a node's implementation took a different approach, or narrowed/broadened scope, or split follow-ups into new issues, edit that **sub-issue's body** so its description matches what actually shipped — don't close it still describing a plan that didn't happen (contract rule 4). Only where the description would now mislead; skip nodes that shipped as written.
 8. **Reconcile cross-referenced issues.** Beyond the manifest and the named parent, reconcile any **other** issue the run's PRs or sub-issue bodies `Relates to` / `Part of` / mention (contract rule 5): tick its tracker line, close it if a node fully resolved it, or post a one-line "addressed by PR #<pr>" so the reference isn't left stale. Enumerate them from the merged PRs' bodies and the sub-issue bodies.
@@ -187,10 +260,10 @@ After the report is surfaced, the main session removes the debris the background
 2. **Remove vs. keep is decided by merge state, never by guesswork.** For each in-scope worktree, read its branch (`git worktree list`), then:
    - **Merged + clean** — its PR is `MERGED` (remote branch gone: `git ls-remote --heads origin <branch>` is empty) **and** `git -C <wt> status --porcelain` is empty → `git worktree unlock <wt> 2>/dev/null; git worktree remove --force <wt>; git branch -D <branch>`. Then also delete the worktree's **auto-created placeholder branch** `worktree-<basename-of-wt>` — `git worktree remove` leaves it behind, and it points at a now-merged base commit (verify `git merge-base --is-ancestor worktree-<name> origin/<defaultBranch>` before `git branch -D`). Both the work subagent's feature branch and this placeholder must go for the run to be fully tidy.
    - **Stalled or dirty** — the remote branch still exists (an open PR a human must finish), or the worktree has uncommitted changes → **keep it untouched** and name it in the cleanup summary. A stalled node's worktree is where the fix continues; removing it would destroy in-progress recovery work.
-3. **Heal the default branch.** `git fetch origin <defaultBranch>`. If the primary checkout (or any surviving worktree) is parked on a now-deleted feature branch, switch it back to `<defaultBranch>` (untracked files are preserved across the switch). Then advance local `<defaultBranch>` to `origin/<defaultBranch>`: `git branch -f <defaultBranch> origin/<defaultBranch>` when nothing has it checked out, else `git -C <checkout> merge --ff-only origin/<defaultBranch>`. A local-only commit on `<defaultBranch>` at this point is the **un-squashed twin** of a commit already on `origin/<defaultBranch>` (a squash-merge artifact), so advancing loses no work — confirm with `git log origin/<defaultBranch>..<defaultBranch>` showing only such twins before forcing.
+3. **Heal the checkout to the run's `targetBranch`.** The merges landed on the run's `targetBranch`, so heal *that* branch, not always the default. Let `T` = the run's `targetBranch` (which **is** `<defaultBranch>` on the label-absent path — the text below collapses to today's behavior there, and `integration/<slug>` on a target run). `git fetch origin <T>`. If the primary checkout (or any surviving worktree) is parked on a now-deleted feature branch, switch it back to `<T>` (untracked files are preserved across the switch). Then advance local `<T>` to `origin/<T>`: `git branch -f <T> origin/<T>` when nothing has it checked out, else `git -C <checkout> merge --ff-only origin/<T>`. A local-only commit on `<T>` at this point is the **un-squashed twin** of a commit already on `origin/<T>` (a squash-merge artifact), so advancing loses no work — confirm with `git log origin/<T>..<T>` showing only such twins before forcing.
 4. `git worktree prune`, then report what was removed and what was deliberately kept (stalled worktrees and their branches).
 
-The merge-state gate is what makes this safe to run unattended: a worktree is removed only when its work is provably on `<defaultBranch>` and the tree is clean. Never remove a worktree with uncommitted changes or an unmerged branch, and never touch the run-scoped `.cw-orchestrate/<runId>/` scratch on a run that stalled (its briefs/manifest aid the re-run).
+The merge-state gate is what makes this safe to run unattended: a worktree is removed only when its work is provably on the run's `targetBranch` (the merge target — `<defaultBranch>` on the label-absent path) and the tree is clean. Never remove a worktree with uncommitted changes or an unmerged branch, and never touch the run-scoped `.cw-orchestrate/<runId>/` scratch on a run that stalled (its briefs/manifest aid the re-run).
 
 ## Key Notes
 
@@ -202,5 +275,6 @@ The merge-state gate is what makes this safe to run unattended: a worktree is re
 - **Determinism.** The Workflow forbids `Date.now()` / `Math.random()` / argless `new Date()`. The `runId` and `timestamp` are minted in the main session and passed through the manifest; the scheduler is a pure function.
 - **Git/PR via `gh`/`git`, not MCP.** Background Workflow subagents may not have interactively-authenticated MCP servers; the git/PR path uses `gh` and `git` via Bash, which are always available.
 - **Reusable.** Umbrella context loads through the manifest, not a separate config mechanism (R20). Run the skill on any parent issue with sub-issues.
-- **GitHub stays the source of truth (Step 7).** A run reconciles every issue it touched before it ends: merged-but-open sub-issues are closed (squash-merge auto-closes only with a `Closes #NNN` keyword), parked sub-issues are labeled `cw-status:stalled`/`cw-status:deferred` with an upserted reason comment (the native sub-issue widget rolls up the rest), the umbrella itself is closed once every sub-issue and residual is resolved (left open otherwise), and the parent issue is updated (its umbrella line flips to done only when nothing is left deferred or stalled). Anyone reading the issues sees the true state without the run logs.
-- **Self-cleaning (Step 8).** The run removes its own `wf_<runId>-*` worktrees and local branches and heals the default-branch checkout automatically, scoped to this run's prefix and gated on merge state. Merged nodes' debris is removed; a stalled node's worktree and branch are preserved so the operator can finish the fix in place.
+- **Integration-branch targeting (`cw-target:<slug>`).** The umbrella's `cw-target:<slug>` label (single source of truth — no body field, no per-sub-issue labels; sub-issues inherit it) makes the run land its PRs on `integration/<slug>` instead of the default branch. The label is read and the target derived in the sweep (Step 1, via `target.mjs`); multiple `cw-target:*` labels or an empty/whitespace slug abort before "go". The main session ensures the integration branch exists off `origin/main` and merges `main` in for freshness before launch (Step 4.5). The Workflow still branches work off fresh `defaultBranch` but merges onto `targetBranch` (already-shipped plumbing). On a target run the umbrella is **not** closed — that is cw-promote's job (#39) — and the checkout heals to `integration/<slug>`. Absent the label, every one of these collapses to the default-branch behavior, unchanged.
+- **GitHub stays the source of truth (Step 7).** A run reconciles every issue it touched before it ends: merged-but-open sub-issues are closed (squash-merge auto-closes only with a `Closes #NNN` keyword), parked sub-issues are labeled `cw-status:stalled`/`cw-status:deferred` with an upserted reason comment (the native sub-issue widget rolls up the rest), the umbrella itself is closed once every sub-issue and residual is resolved (left open otherwise — and **never** closed on an integration-target run, which defers closing to cw-promote #39), and the parent issue is updated (its umbrella line flips to done only when nothing is left deferred or stalled). Anyone reading the issues sees the true state without the run logs.
+- **Self-cleaning (Step 8).** The run removes its own `wf_<runId>-*` worktrees and local branches and heals the checkout to the run's merge target (`integration/<slug>` on a target run, `<defaultBranch>` otherwise) automatically, scoped to this run's prefix and gated on merge state. Merged nodes' debris is removed; a stalled node's worktree and branch are preserved so the operator can finish the fix in place.
