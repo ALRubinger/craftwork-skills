@@ -29,7 +29,7 @@ Two tracks share the same philosophy:
 - **Everyday track** - you hit a rough edge while using the product, run `cw-feedback`, and when you're ready you invoke `/cw-ship` to turn the backlog into merged changes. If an item needs a decision, it parks the question into the issue body and pings you; you answer with `cw-resolve` and the next run finishes it on its own.
 - **Initiative track** - for deliberate, multi-PR work you run `cw-scope` to shape it, then `cw-orchestrate` to drive it to done, with `cw-sweep` clearing the review residue. An integration-targeted initiative (one whose sub-issues build onto a shared `integration/<slug>` branch) finishes with `cw-promote`, which atomically lands that branch on `main` once the whole feature is proven.
 
-The split maps to the names: **Craft** is what you fire to capture and decide (`cw-feedback`, `cw-resolve`, `cw-scope`); **Work** is what runs hands-off to merge once you invoke it (`cw-ship`, `cw-orchestrate`, `cw-sweep`).
+The split maps to the names: **Craft** is what you fire to capture and decide (`cw-feedback`, `cw-resolve`, `cw-scope`); **Work** is what runs hands-off to merge once you invoke it (`cw-ship`, `cw-orchestrate`, `cw-sweep`, `cw-promote`).
 
 ## The skills
 
@@ -64,7 +64,7 @@ Or as a Claude Code plugin marketplace:
 /plugin marketplace add ALRubinger/craftwork-skills
 ```
 
-The autonomous skills (`cw-ship`, `cw-orchestrate`, `cw-sweep`) drive real merges via `gh`/`git` once you invoke them — `cw-ship` and `cw-orchestrate` are on-demand, and `cw-sweep` can optionally be put on a schedule. Read each skill's `SKILL.md` before running it, and start with a dry run.
+The Work-track skills (`cw-ship`, `cw-orchestrate`, `cw-sweep`, `cw-promote`) drive real merges via `gh`/`git` once you invoke them — `cw-ship` and `cw-orchestrate` are on-demand, and `cw-sweep` can optionally be put on a schedule. `cw-ship`, `cw-orchestrate`, and `cw-sweep` run hands-off to merge; `cw-promote` is the one operator-gated exception in the Work track — it lands a proven integration branch on `main` only after an explicit operator confirmation. Read each skill's `SKILL.md` before running it, and start with a dry run.
 
 ## Running the loops
 
