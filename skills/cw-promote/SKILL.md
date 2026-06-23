@@ -79,45 +79,69 @@ git fetch origin main
 
 ### Step 2: Verify the feature is whole (concrete merged-onto-integration check)
 
-"Closed" alone does **not** prove a sub-issue's PR landed on the integration branch — a sub-issue could have been closed manually, or its PR could have merged to `main` or some other base. So verify mechanically. Enumerate the in-scope sub-issues, and for **each** one require its closing PR is `MERGED` **and** its `baseRefName == integration/<slug>`:
+"Closed" alone does **not** prove a sub-issue's work landed on the integration branch — a sub-issue could have been closed manually, or its PR could have merged to `main` or some other base. So verify mechanically: the proof is a **MERGED PR whose `baseRefName == integration/<slug>` that closes the sub-issue**.
+
+**Why not `closedByPullRequestsReferences`.** GitHub populates the structured issue↔PR closing linkage (both `closedByPullRequestsReferences` on the issue and `closingIssuesReferences` on the PR) **only for PRs that target the default branch**. A PR that merged onto `integration/<slug>` with `Closes #NNN` in its body leaves *both* sides empty, even though it genuinely closed the work — and an integration-branch merge never auto-closes the issue, so cw-orchestrate closes it by hand (its Step 7). Reading the structured linkage would therefore HALT on **every** integration run — the exact scenario this skill exists for. So enumerate the merged PRs based on `integration/<slug>` and match each sub-issue against them, preferring the structured reference when present and falling back to the PR body's closing keyword:
 
 ```bash
+# Candidate "landed" PRs: merged onto the integration branch.
+landed_prs_json=$(gh pr list --base "$branch" --state merged \
+  --limit 200 --json number,body,closingIssuesReferences)
+
 fail=0
+# `gh issue view --json subIssues` returns a `{nodes, totalCount}` connection
+# object on current gh (2.9x+); older builds returned a flat array. The
+# `(.nodes // .)` handles both shapes.
 mapfile -t subs < <(gh issue view "$umbrella" --json subIssues \
-  --jq '.subIssues[].number')
+  --jq '(.subIssues.nodes // .subIssues)[].number')
 for n in "${subs[@]}"; do
   state=$(gh issue view "$n" --json state --jq '.state')
   if [ "$state" != "CLOSED" ]; then
-    echo "BLOCK #$n: still $state (not merged onto $branch)"; fail=1; continue
+    echo "BLOCK #$n: still $state (not landed on $branch)"; fail=1; continue
   fi
-  # Find the PR(s) that closed it and assert base + merge state.
-  mapfile -t prs < <(gh issue view "$n" --json closedByPullRequestsReferences \
-    --jq '.closedByPullRequestsReferences[].number')
-  landed=0
-  for pr in "${prs[@]}"; do
-    read -r prstate base < <(gh pr view "$pr" --json state,baseRefName \
-      --jq '"\(.state) \(.baseRefName)"')
-    if [ "$prstate" = "MERGED" ] && [ "$base" = "$branch" ]; then landed=1; fi
-  done
-  if [ "$landed" -ne 1 ]; then
-    echo "BLOCK #$n: no MERGED PR with base $branch (closing PRs: ${prs[*]:-none})"
+  # Landed iff some merged PR based on $branch either structurally closes #n
+  # (default-branch case) or names it with a closing keyword in its body
+  # (integration-branch case, where GitHub omits the structured linkage).
+  landed=$(printf '%s' "$landed_prs_json" | jq -r --argjson n "$n" '
+    [ .[]
+      | select(
+          ([.closingIssuesReferences[].number] | index($n))
+          or
+          ((.body // "")
+           | test("(?i)\\b(clos(e|es|ed)|fix(es|ed)?|resolv(e|es|ed))\\b[^#\\n]*#"
+                  + ($n|tostring) + "\\b"))
+        )
+    ] | length')
+  if [ "${landed:-0}" -eq 0 ]; then
+    echo "BLOCK #$n: no MERGED PR based on $branch closes it"
     fail=1
   fi
 done
 [ "$fail" -eq 0 ] || { echo "HALT: feature not whole on $branch"; exit 1; }
 ```
 
-Any sub-issue still open, or whose closing PR merged to a **different** base, **halts** promotion with a named cause — it is flagged, never silently accepted. A sub-issue whose closing PR merged to `main` directly means the feature is fragmented across branches; resolve that before promoting.
+Any sub-issue still open, or with no merged PR based on `integration/<slug>` that closes it, **halts** promotion with a named cause — it is flagged, never silently accepted. A sub-issue whose only closing PR merged to `main` directly means the feature is fragmented across branches; it won't appear among the `--base "$branch"` PRs, so it is caught here.
 
-Then confirm **whole-feature CI on the integration branch is green** — the integration branch is what actually gets squashed onto `main`, so its latest run is the proof the assembled feature works:
+Then confirm **whole-feature CI is green**. The integration branch is what gets squashed onto `main`, so its assembled state is what must be proven — but **where** that proof lives depends on the repo's CI triggers, so check the branch and defer to the gate that actually runs:
 
 ```bash
-gh run list --branch "$branch" --limit 1 \
-  --json status,conclusion,headSha,workflowName
-# require status == "completed" && conclusion == "success" on the branch HEAD
+branch_runs=$(gh run list --branch "$branch" --limit 1 \
+  --json status,conclusion,headSha,workflowName)
+if [ "$(printf '%s' "$branch_runs" | jq 'length')" -gt 0 ]; then
+  # The repo runs CI on the integration branch — require it green now.
+  printf '%s' "$branch_runs" | jq -e \
+    '.[0] | (.status == "completed" and .conclusion == "success")' >/dev/null \
+    || { echo "HALT: latest CI on $branch is not green"; exit 1; }
+else
+  # The repo's CI does not trigger on integration-branch pushes/PRs (e.g. a
+  # workflow gated on `pull_request: branches: [main]` and `push: [main]`).
+  # There is nothing to require here — the real whole-feature gate is the
+  # integration->main PR's own checks, which Step 4 waits on before merging.
+  echo "NOTE: no CI runs on $branch; whole-feature CI is gated on the integration->main PR (Step 4)."
+fi
 ```
 
-A pending, failing, or absent run on `integration/<slug>` halts promotion.
+When CI **does** run on `integration/<slug>`, a pending, failing, or absent-on-HEAD run halts promotion. When it does **not** (the repo only CIs `main` and PRs based on `main`), the gate moves to Step 4: the `integration/<slug> -> main` PR triggers the same CI on a `main` base, and Step 4 merges only once that PR's checks conclude green. Either way the assembled feature is CI-verified before it lands — never `--admin`-merged blind.
 
 ### Step 3: Re-confirm green against fresh `main`
 
@@ -136,7 +160,9 @@ else
   exit 1   # never force-resolve (merge-safety guarantee 6)
 fi
 git worktree remove --force "$wt"
-# re-run CI on $branch and require completed/success again before Step 4
+# If the repo CIs the integration branch, re-confirm completed/success on the
+# new HEAD here (same check as Step 2); otherwise the integration->main PR's
+# checks in Step 4 are the gate. Either way, do not proceed on a red branch run.
 ```
 
 If the main-merge **conflicts**, halt — a headless or unattended context must not pick a side of a conflict (merge-safety [guarantee 6, "No force-resolve, ever"](../cw-orchestrate/references/merge-safety.md)). The operator resolves it on the integration branch, then re-invokes.
@@ -146,19 +172,35 @@ If the main-merge **conflicts**, halt — a headless or unattended context must 
 This is the **single human checkpoint**, mirroring cw-scope's "confirm before writing shared state" gate. Ask for an explicit **"promote"** confirmation (`AskUserQuestion`; load its schema via `ToolSearch` with `select:AskUserQuestion` if needed) showing:
 
 - the **slug** and target branch `integration/<slug>`,
-- the **in-scope sub-issue list** verified in Step 2 (each with its merged closing PR),
-- the **green-CI evidence** from Step 3 (the branch HEAD's successful run).
+- the **in-scope sub-issue list** verified in Step 2 (each with the merged PR, based on `integration/<slug>`, that closes it),
+- the **CI status**: the branch HEAD's successful run when the repo CIs `integration/<slug>` (Step 3), or a note that the whole-feature gate is the `integration/<slug> → main` PR's own checks, which the merge below waits on.
 
-Only on an explicit confirm, open a PR `integration/<slug> → main` with a conventional-commit title and a Summary / Test-plan body, then squash-merge it for the **single atomic commit** that represents the entire feature on `main`:
+Only on an explicit confirm, open a PR `integration/<slug> → main` with a conventional-commit title and a Summary / Test-plan body. For repos that don't CI the integration branch, this PR (base `main`) is where the assembled feature's CI runs — so **wait for its blocking checks to conclude and merge only when they are green**, then squash-merge for the **single atomic commit** that represents the entire feature on `main`:
 
 ```bash
 pr=$(gh pr create --base main --head "$branch" \
   --title "feat(<slug>): land the <feature> integration branch" \
   --body-file <body>)
+
+# This PR's checks are the whole-feature CI gate (especially when the repo does
+# not CI the integration branch directly). Wait for them to settle, then read
+# the concluded buckets explicitly — do NOT trust `--watch`'s exit code as proof
+# of green. A red blocking check is a hard stop; --admin bypasses required
+# *review*, never failing *validation*.
+gh pr checks "$pr" --watch >/dev/null 2>&1 || true
+buckets=$(gh pr checks "$pr" --json bucket --jq '[.[].bucket]' 2>/dev/null || echo '[]')
+if printf '%s' "$buckets" | jq -e 'any(.[]; . == "pending")' >/dev/null; then
+  echo "HALT: CI still pending on PR #$pr — re-invoke once checks have concluded"; exit 1
+fi
+if printf '%s' "$buckets" | jq -e 'any(.[]; . == "fail" or . == "cancel")' >/dev/null; then
+  echo "HALT: a blocking check failed on PR #$pr — fix before promoting (no --admin override of red CI)"; exit 1
+fi
+
+# All blocking checks concluded green (or the repo has no CI at all) — land it.
 gh pr merge "$pr" --repo "<owner>/<repo>" --squash --admin --delete-branch
 ```
 
-Never a merge commit or rebase-merge; never `git checkout main && git merge`. The squash is the whole point: one commit on `main` for the whole feature.
+Never a merge commit or rebase-merge; never `git checkout main && git merge`. The squash is the whole point: one commit on `main` for the whole feature. The `--admin` flag bypasses the codeowner-**review** gate only; the check-conclusion guard above is what ensures it never lands over red or pending CI.
 
 Verify the merge landed and the branch is gone:
 
@@ -210,7 +252,8 @@ Summarize the outcome:
 - **Operator-gated atomic squash is the whole point.** The entire feature lands on `main` as **one** squash commit, only after an explicit operator "promote" (Step 4) — the single human checkpoint, mirroring cw-scope's confirm-before-writing-shared-state gate. Never a merge commit, never a rebase-merge, never `git checkout main && git merge`.
 - **The label is the single source of truth — and it is deleted on completion.** cw-promote reads `cw-target:<slug>` to derive both the slug and the branch `integration/<slug>`, then removes it. No body field, no per-sub-issue labels, no mirrored state (honors no-duplicated-state).
 - **cw-promote is the only thing that closes an integration umbrella.** cw-orchestrate deliberately leaves it open on a target run; this skill is the closing bookend that closes it after the feature is live on `main`.
-- **Closed ≠ landed.** A sub-issue being closed does not prove its PR merged onto the integration branch — Step 2's mechanical `state==MERGED && baseRefName==integration/<slug>` check is what proves the feature is whole. A closing PR that merged to a different base is flagged, not accepted.
+- **Closed ≠ landed.** A sub-issue being closed does not prove its work merged onto the integration branch. Step 2 proves it by finding a MERGED PR **based on `integration/<slug>` that closes the sub-issue** — matched via the PR's structured `closingIssuesReferences` when present, else its body's closing keyword. It does **not** read `closedByPullRequestsReferences`: GitHub populates that structured linkage only for default-branch PRs, so an integration-branch merge always leaves it empty and the old check would have HALTed every promote. A closing PR that merged to a different base never appears among the `--base integration/<slug>` PRs, so it is flagged, not accepted.
+- **CI gates the merge, wherever it runs.** When the repo CIs `integration/<slug>` directly, Step 2/3 require that branch run green. When it does not (CI only triggers on `main` and PRs based on `main`, the common case), there is no branch run to require — the gate moves to the `integration/<slug> → main` PR, whose checks Step 4 waits on and reads explicitly before the squash. The feature is always CI-verified before it lands; `--admin` bypasses required *review*, never failing or pending *validation*, and `--watch`'s exit code is never trusted as proof of green.
 - **Never force-resolve, never force-push `main`.** A re-merge of `main` that conflicts halts (merge-safety guarantee 6); healing the checkout only fast-forwards local `main` to `origin/main`.
 - **`gh`/`git` via Bash**, not MCP — matches cw-orchestrate and cw-scope and survives headless contexts.
 - **Interactive by design.** Like cw-scope, cw-promote ships no background Workflow and no executable script — the value is the verified, operator-gated atomic landing.
