@@ -97,10 +97,53 @@ Steps:
    - FIX_NOW  — a real, small, unambiguous fix. Set confidence "high" only if you are sure the fix is correct, safe, and in-scope (it will be applied and merged with NO human review). If there is any ambiguity about correctness, scope, or approach, set confidence "low".
    - DECISION — needs a human judgment call (a real trade-off, a product/behavior choice, or a fix whose correct form is unclear). Never use this as a dumping ground; reserve it for genuine choices.
    - MOOT     — the finding was wrong, or the implementation diverged so it no longer applies.
+   For EVERY finding you mark DECISION or low-confidence FIX_NOW (i.e. anything that will reach a human), ALSO set these so the operator can be asked with a recommendation-first prompt and the decision can be parked verbatim:
+     - decision_question  — one crisp line stating the choice the operator must make (outcome-framed, not implementation minutiae).
+     - recommended_answer — your single best answer (becomes the first, "(Recommended)" option). Make a real call; only say it's a toss-up if it genuinely is.
+     - alt_options        — 1-3 realistic alternative answers, each a short outcome-framed label.
+   Leave these null/empty on RESOLVED, MOOT, and high-confidence FIX_NOW findings.
 4. Post ONE triage comment on the residual summarizing each finding's verdict + one-line rationale (\`gh issue comment ${residualUrl} --body-file <(...)\`).
 5. CLOSE the residual ONLY if every finding is RESOLVED or MOOT (no action remains): \`gh issue close ${residualUrl} --comment "Triaged: all findings resolved in shipped code or moot. <one line>"\` and set closed:true. Otherwise leave it open (high-confidence FIX_NOW findings are auto-fixed in a later sweep; DECISION / low-confidence findings await a human) and set closed:false.
 
 Be conservative about closing and about high-confidence: closing a real issue or auto-merging a wrong fix is worse than leaving a residual open for a human.
 
-Return structured output: { residual_issue, sub_issue, shipped, closed, findings: [{title, severity, verdict, confidence, rationale, fix_hint}] }.`;
+Return structured output: { residual_issue, sub_issue, shipped, closed, findings: [{title, severity, verdict, confidence, rationale, fix_hint, decision_question, recommended_answer, alt_options}] }.`;
 };
+
+// decisionFindings + parkResidualPrompt drive the in-run PARK step: the headless
+// analog of the autofix sweep. After triage, each parkCandidates() residual gets
+// a "## Decision needed" block written into its body and the
+// cw-review-residual:needs-input label, so a standalone /cw-resolve (which queries
+// --label cw-review-residual:needs-input) can discover and drain it. This mirrors
+// cw-sweep's Park phase; the same decision_question / recommended_answer /
+// alt_options fields authored at triage feed the parked block verbatim.
+//
+// Not byte-mirrored as `function NAME` blocks (they are arrow consts holding
+// template literals); mirror.test.mjs renders them and asserts equality instead.
+
+export const decisionFindings = (tr) =>
+  ((tr && tr.findings) || []).filter(
+    (f) => f.verdict === 'DECISION' || (f.verdict === 'FIX_NOW' && f.confidence !== 'high'),
+  );
+
+export const parkResidualPrompt = (m, tr, residualUrl) => `You are PARKING one cw-review-residual issue for the operator's input, using gh via Bash. Repo ${m.repo}. Residual: ${residualUrl} (#${tr.residual_issue}, feature #${tr.sub_issue}). Its findings against the shipped code include genuine judgment calls only the operator should make.
+
+Steps:
+1. Fetch the current body: \`gh issue view ${tr.residual_issue} --repo ${m.repo} --json body -q .body > body.md\`.
+2. Write the decisions into body.md as a "## Decision needed" block — one numbered entry per decision below, each showing the question, your recommended answer, and the alternatives. Each entry MUST carry an "**Answer:** " line (left blank for the operator to fill) so /cw-resolve can parse and write the answer back. If a "## Decision needed" block already exists (a prior park), REPLACE it in place rather than appending a second one. The decisions:
+\`\`\`json
+${JSON.stringify(
+  decisionFindings(tr).map((f) => ({
+    question: f.decision_question || f.title,
+    recommended: f.recommended_answer || null,
+    alternatives: f.alt_options || [],
+  })),
+  null,
+  2,
+)}
+\`\`\`
+   End the block with: "_To proceed: answer each decision inline above, then add the \\\`cw-review-residual:go\\\` label (or run /cw-resolve). The next cw-sweep run applies your answers._"
+   Use \`gh issue edit ${tr.residual_issue} --repo ${m.repo} --body-file body.md\` (never hand-escape backticks or checklists).
+3. Flip labels to the parked state: \`gh issue edit ${tr.residual_issue} --repo ${m.repo} --add-label cw-review-residual:needs-input --remove-label cw-review-residual:go\` (create cw-review-residual:needs-input first if missing: color D93F0B). Do NOT add cw-review-residual:go — that is the operator's action.
+
+Return structured output: { issue: ${tr.residual_issue}, parked: true }.`;

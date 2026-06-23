@@ -204,8 +204,9 @@ The Workflow performs, in order (see `workflow.js` and [references/subagent-role
 3. **Pre-flight schedule** — declared deps ∪ file-overlap (set-intersection over ownership tables) → ordered waves (R12, AE2, AE6).
 4. **Work** — a work subagent per node in wave order, each in its own worktree, taking the issue through implementation → PR → serialized squash-merge with the full merge-safety contract (R13–R16, AE5).
 5. **Triage** — the moment a node merges, its filed `cw-review-residual` issue is re-judged against the now-shipped diff: each finding classified `RESOLVED` / `FIX_NOW` / `DECISION` / `MOOT`, a triage comment posted, and the residual closed if nothing actionable remains. Fired without holding the merge lock. See [references/residual-triage.md](./references/residual-triage.md).
-6. **Autofix** — a final sweep over the now-quiescent default branch: each residual with a high-confidence `FIX_NOW` finding gets one PR (implementing only those fixes) serial-merged through the same contract. Low-confidence fixes and `DECISION` findings are **not** auto-applied — they become escalations.
-7. **Failure policy + report** — a non-green node halts its transitive dependents and lets independents finish; the run returns a structured report (R17, R18, AE4-failure).
+6. **Autofix** — a final sweep over the now-quiescent default branch: each residual with a high-confidence `FIX_NOW` finding gets one PR (implementing only those fixes) serial-merged through the same contract. Low-confidence fixes and `DECISION` findings are **not** auto-applied — they are parked (next step) and surfaced as escalations.
+7. **Park** — the headless analog of autofix: each shipped residual still carrying a judgment call (a `DECISION` or low-confidence `FIX_NOW`) gets a `## Decision needed` block written into its body and the `cw-review-residual:needs-input` label, so a standalone `/cw-resolve` discovers and drains it. This mirrors `cw-sweep`'s Park phase — the in-run judgment calls are parked durably, not left visible only in the run report. Unshipped residuals defer instead of parking. See [references/residual-triage.md](./references/residual-triage.md).
+8. **Failure policy + report** — a non-green node halts its transitive dependents and lets independents finish; the run returns a structured report (R17, R18, AE4-failure).
 
 ### Step 6: Surface the report
 
@@ -218,6 +219,7 @@ On completion the Workflow returns:
   "residuals": [{ "issue": 985, "url": "https://github.com/.../issues/MMM", "p0": true }],
   "triaged":   [{ "residual_issue": 1000, "sub_issue": 986, "shipped": true, "closed": true, "disposition": "close-now" }],
   "autofixed": [{ "residual_issue": 992, "pr": "https://github.com/.../pull/NNN", "merged": true, "cause": null }],
+  "parked": [1010],
   "escalations": [{ "residual_issue": 1010, "sub_issue": 984, "title": "...", "verdict": "DECISION", "confidence": null, "rationale": "..." }],
   "deferred_residuals": [1010]
 }
@@ -225,7 +227,7 @@ On completion the Workflow returns:
 
 Render it in the main session (R18): which issues merged clean, which stalled and why, which residual issues were filed (with links). Distinguish "merged clean" from "merged with filed residuals" per sub-issue (Success Criteria).
 
-The run now also **clears its own residuals** as it goes: `triaged` lists residuals re-judged against shipped code and whether each was closed; `autofixed` lists the high-confidence fixes that were applied and merged. The only items that need the operator's attention are **`escalations`** (genuine judgment calls + fixes the classifier wasn't confident enough to auto-apply) and **`deferred_residuals`** (residuals whose sub-issue didn't ship this run — re-triaged on a later run). Surface those two prominently; the closed/autofixed residuals are done. Any residual still open after the run remains structured so a **future** `cw-orchestrate` run can adopt it as a sub-issue (R11, R20), and the standalone `cw-sweep` skill can re-triage the backlog on demand.
+The run now also **clears its own residuals** as it goes: `triaged` lists residuals re-judged against shipped code and whether each was closed; `autofixed` lists the high-confidence fixes that were applied and merged. The items that need the operator's attention are **`escalations`** (genuine judgment calls + fixes the classifier wasn't confident enough to auto-apply) and **`deferred_residuals`** (residuals whose sub-issue didn't ship this run — re-triaged on a later run). Each escalation is **also parked** durably to its residual (`parked` lists the residual numbers that received a `## Decision needed` block + the `cw-review-residual:needs-input` label), so a standalone `/cw-resolve` discovers and drains them even if no one reads this report; surfacing them inline here is the convenience copy, the park is the durable one. Surface `escalations` and `deferred_residuals` prominently; the closed/autofixed residuals are done. Any residual still open after the run remains structured so a **future** `cw-orchestrate` run can adopt it as a sub-issue (R11, R20), and the standalone `cw-sweep` skill can re-triage the backlog on demand.
 
 ### Step 7: Reconcile the umbrella and referenced issues (GitHub is the source of truth)
 

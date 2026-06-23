@@ -23,6 +23,12 @@
 //       confidence: 'high' | 'low',   // load-bearing ONLY when verdict === 'FIX_NOW'
 //       rationale:  string,
 //       fix_hint:   string | null,
+//       // Present ONLY on findings that need a human (DECISION or low-conf FIX_NOW),
+//       // so the operator can be asked with a recommendation-first prompt and the
+//       // same data can be written into the parked "## Decision needed" block:
+//       decision_question:  string | null,   // one-line question to show the operator
+//       recommended_answer: string | null,   // the planner's pick (first option, "Recommended")
+//       alt_options:        string[],         // 1-3 realistic alternative answers
 //     }]
 //   }
 //
@@ -110,6 +116,29 @@ export function escalations(results) {
     }
   }
   return out.sort((a, b) => a.residual_issue - b.residual_issue);
+}
+
+/**
+ * Residual-issue numbers to PARK for operator input on a headless run: SHIPPED
+ * residuals carrying at least one human-needed finding (DECISION or low-conf
+ * FIX_NOW), ascending. The headless analog of autofixCandidates() — the set that
+ * gets a "## Decision needed" block + the cw-review-residual:needs-input label.
+ * Unshipped residuals defer (deferredResiduals) rather than park.
+ * @param {Array} results
+ * @returns {number[]}
+ */
+export function parkCandidates(results) {
+  return (results || [])
+    .filter(Boolean)
+    .filter(
+      (r) =>
+        r.shipped !== false &&
+        (r.findings || []).some(
+          (f) => f.verdict === 'DECISION' || (f.verdict === 'FIX_NOW' && f.confidence !== 'high'),
+        ),
+    )
+    .map((r) => r.residual_issue)
+    .sort((a, b) => a - b);
 }
 
 /**

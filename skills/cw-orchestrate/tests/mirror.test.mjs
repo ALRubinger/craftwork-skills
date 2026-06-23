@@ -103,6 +103,7 @@ for (const fn of [
   'highConfidenceFixes',
   'autofixCandidates',
   'escalations',
+  'parkCandidates',
   'deferredResiduals',
 ]) {
   test(`workflow.js mirror of ${fn} matches triage.mjs`, () => {
@@ -159,5 +160,46 @@ test('workflow.js triagePrompt mirror matches prompts.mjs', async () => {
         `triagePrompt drifted (target=${m.targetBranch}, hint=${hint})`,
       );
     }
+  }
+});
+
+// decisionFindings + parkResidualPrompt are arrow consts (not `function NAME`
+// blocks) and parkResidualPrompt closes over decisionFindings, so compile the pair
+// out of the workflow.js text together and compare rendered output against the
+// canonical prompts.mjs exports.
+async function workflowParkBuilder(name) {
+  const dep = extractDeclExpr(workflowSrc, 'decisionFindings');
+  const expr = extractDeclExpr(workflowSrc, name);
+  const decls = name === 'decisionFindings'
+    ? `export const decisionFindings = ${dep};`
+    : `const decisionFindings = ${dep};\nexport const ${name} = ${expr};`;
+  const url = 'data:text/javascript,' + encodeURIComponent(decls);
+  return (await import(url))[name];
+}
+
+const parkTr = {
+  residual_issue: 1010,
+  sub_issue: 984,
+  findings: [
+    { title: 'A', verdict: 'DECISION', confidence: null, decision_question: 'Q1?', recommended_answer: 'R1', alt_options: ['Alt1', 'Alt2'] },
+    { title: 'B', verdict: 'FIX_NOW', confidence: 'low', decision_question: 'Q2?', recommended_answer: 'R2', alt_options: [] },
+    { title: 'C', verdict: 'FIX_NOW', confidence: 'high' }, // excluded — high-conf
+    { title: 'D', verdict: 'RESOLVED' }, // excluded
+  ],
+};
+
+test('workflow.js decisionFindings mirror matches prompts.mjs', async () => {
+  const mirror = await workflowParkBuilder('decisionFindings');
+  assert.deepEqual(mirror(parkTr), canonicalPrompts.decisionFindings(parkTr));
+});
+
+test('workflow.js parkResidualPrompt mirror matches prompts.mjs', async () => {
+  const mirror = await workflowParkBuilder('parkResidualPrompt');
+  for (const m of promptManifests) {
+    assert.equal(
+      mirror(m, parkTr, 'http://res/1010'),
+      canonicalPrompts.parkResidualPrompt(m, parkTr, 'http://res/1010'),
+      `parkResidualPrompt drifted (target=${m.targetBranch})`,
+    );
   }
 });
