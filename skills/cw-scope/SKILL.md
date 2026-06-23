@@ -97,6 +97,8 @@ Cut the work into sub-issues at **one-orchestrate-able-PR** granularity — each
 
 Run the **completeness check** on each draft: read it as if you were the headless planner and name anything you'd have to invent. Close every such gap with the user, or record it explicitly as an accepted gap. No sub-issue ships carrying a silent assumption.
 
+Run the **self-containment check** alongside it: a fresh session must be able to plan the sub-issue from its body plus the **committed** repo alone. A **Pointers** entry is valid only if it resolves on the default branch — a repo-relative file, a merged ADR, a landed PR. An uncommitted `ce-brainstorm` requirements doc, a scratch path, or any local-only artifact is **not** a pointer: inline its resolved decisions (with their requirement numbers and text if you cite them by number) into **Resolved decisions** and reference nothing. If decisions came from a brainstorm, the brainstorm doc stays private scratch — neither committed nor cited. The bar is the same one orchestrate's sweep enforces: a body that points at something the sweep can't open is not `ready`.
+
 ### Step 5: Declare dependencies
 
 With the user, declare **logical** dependency edges between sub-issues — "B's implementation needs A's merged code", independent of file overlap. State them as `depends_on` in the umbrella body so the orchestrate sweep confirms rather than derives. Validate the edges form a DAG; reject cycles. (File-contention ordering is computed later by orchestrate from plan ownership tables — do not declare it here.)
@@ -146,6 +148,7 @@ If this initiative changed a decision recorded in durable memory (e.g. a default
 
 - **The output is the umbrella, not a plan.** This skill resolves *what* and *why* and structures it; *how* is the planner's job (orchestrate's Workflow). Keep implementation design out of sub-issue bodies except where a decision is itself the point (a kept abstraction seam, a spec-first ordering, a decided error string).
 - **Route-to-ready is the contract.** Every sub-issue body must be complete enough that orchestrate's sweep routes it `ready`. That is the single quality bar.
+- **Self-contained or it isn't ready.** A body that leans on an uncommitted brainstorm doc, a scratch file, or any artifact the sweep can't open is `clarify-now`, not `ready` — inline the decisions, cite nothing local (Step 4). Pointers are for things on the default branch (repo files, merged ADRs, landed PRs) only.
 - **Mirror orchestrate's vocabulary** — `ready` / `clarify-now` / `back-off`, readiness brief, `depends_on`, DAG — so the two skills compose without translation.
 - **Own sub-issues are always native; mirror only the *up*-link.** A cw-skill umbrella tracks its own children as GitHub native sub-issues, full stop — no body checklist, no duplicated title list. The detect-and-match rule applies only to linking the umbrella *up* into a parent you don't own: don't impose native sub-issues on a human milestone that tracks children by body checklist (or vice versa).
 - **`gh`/`git` via Bash**, not MCP — matches orchestrate and survives headless contexts.

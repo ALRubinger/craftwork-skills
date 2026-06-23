@@ -69,6 +69,22 @@ Read the feedback for the **one** ambiguity that would most change what gets bui
 
 You are recording intent for a planner to research, not preflighting every decision. The triage loop's preflight is where deep design questions surface (and get synced back to you via the issue body). Resist front-loading them here.
 
+### Step 4.5: Self-containment gate — the issue *is* the contract
+
+The issue you file is the whole brief. A fresh session — and the headless cw-ship loop — must be able to plan and ship it from the **issue text plus the committed repo, and nothing else**. Anything it leans on that lives outside those two places is a dead pointer downstream.
+
+Before filing, scan the feedback and whatever you drafted from it for a reference a fresh session couldn't follow:
+
+- a local or uncommitted file — a `ce-brainstorm` requirements doc, a design note, a scratch path under `docs/brainstorms/`, `/tmp`, or a worktree;
+- a repo path that isn't on the default branch;
+- a "see the doc", "per the brainstorm", "as decided in X" pointer whose target isn't reproduced in the issue.
+
+For each, **inline the decided content and delete the pointer.** Lift the actual decisions, constraints, requirements (with their numbers and text if you reference them by number), and acceptance criteria into the body, in enough detail that the issue is executable without the artifact. Then remove the reference. The test is literal: *issue text + committed repo = enough to plan and ship.* A reference you can't inline away means content is missing, not that a citation is needed.
+
+**The `ce-brainstorm` → `cw-feedback` handoff is exactly this gate.** When a brainstorm produced a requirements doc and you're filing feedback from it, absorbing that doc's resolved decisions into the issue body **is the job**. The brainstorm doc stays a private scratch artifact: it is **not** committed and **not** cited. The issue carries everything; the doc is referenced by nothing.
+
+This is the one place capture isn't a few seconds. A brainstorm-backed issue is necessarily long because it inlines the decisions, and that length is correct. Pay self-containment here, once, instead of letting a fresh planner hit a missing file.
+
 ### Step 5: Ensure labels exist
 
 The handoff to cw-ship runs on a label state machine (see [cw-ship/references/state-machine.md](../cw-ship/references/state-machine.md)). Ensure the base + entry labels exist in the target repo, creating any that are missing:
@@ -120,6 +136,7 @@ gh issue edit <n> --repo <repo> --add-label cw-feedback:hold --remove-label cw-f
 ## Key Notes
 
 - **One observation, one issue.** Don't bundle three gripes into one issue; the triage loop plans per-issue. File three.
+- **The issue is the whole contract (self-containment).** A fresh session must plan and ship from the issue text + committed repo alone — never from a local or uncommitted doc. Brainstorm-backed feedback inlines the brainstorm's decisions into the body; the doc itself is neither committed nor cited (Step 4.5). A dangling reference here becomes a dead pointer in every umbrella and sub-issue cw-ship later derives from it.
 - **Intent, not prescription.** Record *what's wrong and what you want*, not *how to fix it*. Naming a fix is fine as a hint, but the planner re-derives the real change against the code — over-specifying here can send it down your guessed path instead of the right one.
 - **Cheap by design.** No planning, no scoping, no PR. If you find yourself asking more than one question, stop — that depth belongs in the triage loop's preflight, which syncs back through the issue body.
 - **`gh`/`git` via Bash**, not MCP — matches the downstream headless loop.
