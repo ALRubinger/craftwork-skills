@@ -20,13 +20,14 @@ cw-ship         the autonomous loop            -> build + merge, or park, or esc
 cw-resolve      answer the parked questions    -> clears work to run autonomously
 cw-scope        scope a large initiative       -> a ready umbrella of sub-issues
 cw-orchestrate  execute a scoped initiative    -> sub-issues driven to merged PRs
+cw-promote      land a proven integration branch -> one squash commit on main
 cw-sweep        clean up leftover review notes  -> a tidy backlog
 ```
 
 Two tracks share the same philosophy:
 
 - **Everyday track** - you hit a rough edge while using the product, run `cw-feedback`, and when you're ready you invoke `/cw-ship` to turn the backlog into merged changes. If an item needs a decision, it parks the question into the issue body and pings you; you answer with `cw-resolve` and the next run finishes it on its own.
-- **Initiative track** - for deliberate, multi-PR work you run `cw-scope` to shape it, then `cw-orchestrate` to drive it to done, with `cw-sweep` clearing the review residue.
+- **Initiative track** - for deliberate, multi-PR work you run `cw-scope` to shape it, then `cw-orchestrate` to drive it to done, with `cw-sweep` clearing the review residue. An integration-targeted initiative (one whose sub-issues build onto a shared `integration/<slug>` branch) finishes with `cw-promote`, which atomically lands that branch on `main` once the whole feature is proven.
 
 The split maps to the names: **Craft** is what you fire to capture and decide (`cw-feedback`, `cw-resolve`, `cw-scope`); **Work** is what runs hands-off to merge once you invoke it (`cw-ship`, `cw-orchestrate`, `cw-sweep`).
 
@@ -39,6 +40,7 @@ The split maps to the names: **Craft** is what you fire to capture and decide (`
 | [`cw-resolve`](skills/cw-resolve) | everyday | Walk you through the design questions the loop parked, record your answers, release the work. |
 | [`cw-scope`](skills/cw-scope) | initiative | Interactively scope a large initiative into a ready set of sub-issues. |
 | [`cw-orchestrate`](skills/cw-orchestrate) | initiative | Drive a scoped initiative's sub-issues to merged PRs, hands-off. |
+| [`cw-promote`](skills/cw-promote) | initiative | Atomically squash-promote a proven `integration/<slug>` branch into `main`, then close the umbrella and tear down the target. |
 | [`cw-sweep`](skills/cw-sweep) | initiative | Clean up the leftover review findings after an orchestrate run. |
 
 ## Install
