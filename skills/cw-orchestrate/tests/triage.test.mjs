@@ -5,6 +5,7 @@ import {
   highConfidenceFixes,
   autofixCandidates,
   escalations,
+  parkCandidates,
   deferredResiduals,
 } from '../triage.mjs';
 
@@ -95,6 +96,30 @@ test('escalations: DECISION and low-conf FIX_NOW surface; RESOLVED/MOOT/high-con
   assert.equal(esc[0].confidence, 'low');
   assert.equal(esc[1].residual_issue, 12);
   assert.equal(esc[1].verdict, 'DECISION');
+});
+
+test('parkCandidates: shipped residuals with judgment calls, ascending', () => {
+  const results = [
+    { residual_issue: 30, shipped: true, findings: [f('FIX_NOW', 'low')] }, // low-conf -> human
+    { residual_issue: 10, shipped: true, findings: [f('DECISION', null), f('FIX_NOW', 'high')] },
+    { residual_issue: 20, shipped: true, findings: [f('RESOLVED'), f('FIX_NOW', 'high')] }, // no human
+  ];
+  assert.deepEqual(parkCandidates(results), [10, 30]);
+});
+
+test('parkCandidates: excludes unshipped residuals (they defer, not park)', () => {
+  const results = [
+    { residual_issue: 5, shipped: false, findings: [f('DECISION', null)] },
+    { residual_issue: 6, shipped: true, findings: [f('DECISION', null)] },
+    { residual_issue: 7, findings: [f('DECISION', null)] }, // shipped undefined -> park (not deferred)
+  ];
+  assert.deepEqual(parkCandidates(results), [6, 7]);
+});
+
+test('parkCandidates: tolerates null/empty', () => {
+  assert.deepEqual(parkCandidates([]), []);
+  assert.deepEqual(parkCandidates([null]), []);
+  assert.deepEqual(parkCandidates(undefined), []);
 });
 
 test('deferredResiduals: only unshipped sub-issues, ascending', () => {
