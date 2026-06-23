@@ -96,7 +96,7 @@ A residual is marked `shipped:false` and deferred **only** when the feature is g
 
 **Purpose:** Implement the high-confidence `FIX_NOW` findings for one residual, in isolation, as one PR — then return for serial merge.
 
-**When it runs:** a **final sweep**, after every feature node has merged or stalled and the default branch is quiescent. Running here (not interleaved per-node) is deliberate: nothing else is merging, so a residual fix cannot collide with an unmerged sibling that the up-front wave schedule never accounted for.
+**When it runs:** a **final sweep**, after every feature node has merged or stalled and the default branch is quiescent. Running here (not interleaved per-node) is deliberate: nothing else is merging, so a residual fix cannot collide with an unmerged sibling that the per-node schedule never accounted for.
 
 **Dispatch:** `agent(autofixPrompt(node), { isolation: 'worktree', schema: BUILD_SCHEMA, phase: 'Autofix' })`, one per `autofixCandidates` entry, sequential. The subagent receives **only** the high-confidence fixes (`highConfidenceFixes(result)`) and is instructed to stay strictly in scope — a fix that turns out larger or ambiguous than described is skipped and noted, never expanded.
 
