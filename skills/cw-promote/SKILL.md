@@ -62,7 +62,7 @@ mapfile -t targets < <(gh issue view "$umbrella" --json labels \
   --jq '.labels[].name | select(startswith("cw-target:"))')
 ```
 
-- **Zero** `cw-target:*` labels ⇒ this is **not** an integration umbrella — halt. cw-orchestrate already lands non-integration umbrellas straight to `main` and closes them; there is nothing to promote.
+- **Zero** `cw-target:*` labels ⇒ treat as **already-promoted / no-op**, not a hard error. Either this was never an integration umbrella (cw-orchestrate already lands non-integration umbrellas straight to `main` and closes them) **or** a previous cw-promote run already completed and deleted the label in Step 5. Because the label is deleted last (Step 5's final cleanup), a re-run after a partial failure lands here with the feature already on `main`; reconcile any leftover steps (close the umbrella if still open, reconcile the parent up-link, heal the checkout) idempotently and exit success — never re-merge and never HALT. There is simply nothing left to promote.
 - **More than one** `cw-target:*` label ⇒ halt and name the conflicting labels. cw-promote does not guess which target was intended; the operator removes the extra label and re-invokes (mirrors cw-orchestrate's Step 1 abort).
 - **Exactly one** ⇒ derive deterministically: strip the `cw-target:` prefix to get `slug`, then `branch=integration/<slug>`. The slug is a git-ref-safe segment by construction (cw-scope mints it that way); an empty/whitespace slug is malformed — hard-stop, never fall back to `main`.
 
@@ -174,17 +174,15 @@ gh pr view "$pr" --json state --jq '.state'   # require "MERGED"
 
 With the feature on `main`, tear down the target state per the shared [issue-reconciliation contract](../cw-orchestrate/references/issue-reconciliation.md):
 
-1. **Close the umbrella.** cw-promote owns this close because cw-orchestrate deliberately left the integration umbrella **open** for it (cw-orchestrate's Step 7: "do not close the umbrella … Closing the umbrella and promoting the integration branch is cw-promote's job").
+The order matters: every reversible, idempotent step runs **first**, and the **irreversible repo-wide label delete runs last** (item 4). That way a partial-failure re-run still finds the `cw-target:<slug>` label and can re-derive the slug/branch and resume — deleting the label first would strand a half-promoted feature with no single source of truth to re-enter on.
+
+1. **Close the umbrella.** cw-promote owns this close because cw-orchestrate deliberately left the integration umbrella **open** for it (cw-orchestrate's Step 7: "do not close the umbrella … Closing the umbrella and promoting the integration branch is cw-promote's job"). Idempotent — skip if already closed.
    ```bash
    gh issue close "$umbrella" --reason completed \
      --comment "Promoted integration/${slug} to main via PR #${pr} (single squash commit). Feature is live; cw-target:${slug} removed."
    ```
-2. **Delete the `cw-target:<slug>` label repo-wide.** The target is done — the single-source-of-truth label is **removed, not mirrored** (no duplicated state). Deleting the label also strips it from every sub-issue that inherited it, leaving no stale target marker.
-   ```bash
-   gh label delete "cw-target:${slug}" --yes
-   ```
-3. **Reconcile the parent up-link** per the reconciliation contract. If the umbrella names a parent (e.g. a milestone `Parent: #35`) that tracks it in a `- [ ] #NNN` body checklist, tick that line by hand and annotate it ("promoted via PR #<pr>"); **never auto-close a human milestone**. If the parent uses native sub-issues, the widget rolls up the umbrella's close on its own — nothing to edit.
-4. **Heal the local checkout.** The integration branch is deleted and the feature is on `main`:
+2. **Reconcile the parent up-link** per the reconciliation contract. If the umbrella names a parent (e.g. a milestone `Parent: #35`) that tracks it in a `- [ ] #NNN` body checklist, tick that line by hand and annotate it ("promoted via PR #<pr>"); **never auto-close a human milestone**. If the parent uses native sub-issues, the widget rolls up the umbrella's close on its own — nothing to edit.
+3. **Heal the local checkout.** The integration branch is deleted and the feature is on `main`:
    ```bash
    git fetch origin main
    # If the primary checkout (or a worktree) is parked on the now-deleted
@@ -193,6 +191,10 @@ With the feature on `main`, tear down the target state per the shared [issue-rec
                                     # else: git -C <checkout> merge --ff-only origin/main
    ```
    Never force-push `main`. Advancing local `main` to `origin/main` is a fast-forward (the squash commit is already on the remote), so no work is lost.
+4. **Delete the `cw-target:<slug>` label repo-wide — deliberately last, and irreversible.** The target is done — the single-source-of-truth label is **removed, not mirrored** (no duplicated state). Deleting the label also strips it from every sub-issue that inherited it, leaving no stale target marker. This is the **final** cleanup step precisely because it is the one irreversible action: once the label is gone the slug/branch can no longer be re-derived, so it runs only after every other reconciliation has succeeded. A re-run that reaches Step 1 with zero `cw-target:*` labels treats that as already-promoted (Step 1's no-op path).
+   ```bash
+   gh label delete "cw-target:${slug}" --yes
+   ```
 
 ### Step 6: Report
 
