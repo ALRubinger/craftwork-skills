@@ -1,6 +1,11 @@
 version: '3'
 
 tasks:
+  link:
+    desc: Symlink every skill into your Claude skills dir (authoring machine — re-run after adding a skill)
+    cmds:
+      - bash scripts/link-skills.sh {{.CLI_ARGS}}
+
   test:
     desc: Run the node --test suites across all skills
     cmds:
