@@ -148,7 +148,7 @@ gh issue create \
 > ```
 >
 > Steps:
-> 1. Create a branch off fresh `{defaultBranch}` in your worktree.
+> 1. Create a branch off fresh `{targetBranch}` in your worktree.
 > 2. Implement the plan. Follow repo conventions (AGENTS.md/CLAUDE.md): regenerate generated files rather than hand-editing; write tests for new behavior; keep coverage above the repo bar.
 > 3. Run the repo's build + test suite. Tests must pass before you open a PR.
 > 4. Open a PR with a conventional-commit title and a Summary + Test plan body. The body **must include a `Closes #{number}` line** (on its own line) so the squash-merge auto-closes the sub-issue — the orchestrator's Step 7 reconciliation is a backstop, not a substitute. Push the branch.
@@ -157,7 +157,7 @@ gh issue create \
 >
 > If you cannot reach a green build + passing tests + clean review, report `ready_to_merge: false` with the cause rather than papering over it.
 
-The work role always branches off and tests against fresh `{defaultBranch}` (the *freshness base*), regardless of where the PR ultimately lands. The *merge target* — the branch the serial merge step squash-merges onto — is `{targetBranch}` (defaults to `{defaultBranch}`). When the two differ, the work role must open the PR **against the target** (`gh pr create --base {targetBranch}`), or the squash-merge would land on the wrong branch; when they are equal the instruction is omitted (byte-identical single-branch behavior). See `manifest-schema.md` for the base-vs-target split.
+The work role branches off and tests against fresh `{targetBranch}` — the *merge target* the serial merge step squash-merges onto, which also serves as the *fork base* so each node builds on the run's accumulated work. `{targetBranch}` defaults to `{defaultBranch}`, and the Step 4.5 ensure merges `{defaultBranch}` into it before launch, so the fork base is always fresh. When target and default differ, the work role must also open the PR **against the target** (`gh pr create --base {targetBranch}`), or the squash-merge would land on the wrong branch; when they are equal the explicit `--base` instruction is omitted (byte-identical single-branch behavior). See `manifest-schema.md` for the base-vs-target split.
 
 **Output schema (`BUILD_SCHEMA`):**
 

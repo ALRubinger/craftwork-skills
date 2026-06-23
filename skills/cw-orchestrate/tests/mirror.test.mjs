@@ -135,6 +135,19 @@ const promptManifests = [
 ];
 const node = { issue: 7, plan_markdown: 'PLAN' };
 const built = { pr_number: 12, pr_url: 'http://pr/12', branch: 'feat/x', issue: 7 };
+const planIssue = { number: 7, title: 'Title' };
+const briefText = 'BRIEF';
+
+test('workflow.js planPrompt mirror matches prompts.mjs', async () => {
+  const mirror = await workflowBuilder('planPrompt');
+  for (const m of promptManifests) {
+    assert.equal(
+      mirror(m, planIssue, briefText),
+      canonicalPrompts.planPrompt(m, planIssue, briefText),
+      `planPrompt drifted (target=${m.targetBranch})`,
+    );
+  }
+});
 
 test('workflow.js workPrompt mirror matches prompts.mjs', async () => {
   const mirror = await workflowBuilder('workPrompt');
@@ -202,4 +215,77 @@ test('workflow.js parkResidualPrompt mirror matches prompts.mjs', async () => {
       `parkResidualPrompt drifted (target=${m.targetBranch})`,
     );
   }
+});
+
+// autofixPrompt is an arrow const closing over `mergeTarget` (a const) plus
+// `highConfidenceFixes` and `closeDisposition` (the inlined triage `function`
+// blocks). Compile it out of the workflow.js text with all three deps so the
+// rendered output can be compared to the canonical prompts.mjs export.
+async function workflowAutofixBuilder() {
+  const mergeTargetDecl = extractDeclExpr(workflowSrc, 'mergeTarget');
+  // extractFunction returns just the `{ ... }` body, so re-attach the signature
+  // to rebuild a usable `function NAME(args) { ... }` declaration.
+  const fnDecl = (name) => `function ${name}(result) ${extractFunction(workflowSrc, name)}`;
+  const expr = extractDeclExpr(workflowSrc, 'autofixPrompt');
+  const decls = `const mergeTarget = ${mergeTargetDecl};\n`
+    + `${fnDecl('highConfidenceFixes')}\n`
+    + `${fnDecl('closeDisposition')}\n`
+    + `export const autofixPrompt = ${expr};`;
+  const url = 'data:text/javascript,' + encodeURIComponent(decls);
+  return (await import(url)).autofixPrompt;
+}
+
+const autofixTr = {
+  residual_issue: 1010,
+  sub_issue: 984,
+  findings: [
+    { title: 'A', verdict: 'FIX_NOW', confidence: 'high', fix_hint: 'do A', rationale: 'because A' },
+    { title: 'B', verdict: 'FIX_NOW', confidence: 'high', fix_hint: 'do B', rationale: 'because B' },
+  ],
+};
+// A tr where a DECISION remains, so closeDisposition !== 'close-via-autofix'
+// (exercises the Relates-to branch of the close-vs-relate disposition).
+const autofixTrKeepOpen = {
+  residual_issue: 2020,
+  sub_issue: 985,
+  findings: [
+    { title: 'A', verdict: 'FIX_NOW', confidence: 'high', fix_hint: 'do A', rationale: 'because A' },
+    { title: 'B', verdict: 'DECISION', decision_question: 'Q?' },
+  ],
+};
+
+test('workflow.js autofixPrompt mirror matches prompts.mjs', async () => {
+  const mirror = await workflowAutofixBuilder();
+  for (const m of promptManifests) {
+    for (const tr of [autofixTr, autofixTrKeepOpen]) {
+      assert.equal(
+        mirror(m, tr),
+        canonicalPrompts.autofixPrompt(m, tr),
+        `autofixPrompt drifted (target=${m.targetBranch}, residual=${tr.residual_issue})`,
+      );
+    }
+  }
+});
+
+// Cross-render invariant: plan/work/autofix fork off the merge TARGET, not the
+// default branch. When target !== default the fork-base line names the target;
+// when target === default every rendered string collapses to the single-branch
+// output (byte-identical to the absent-target case). This is the core fix for #56.
+test('plan/work/autofix reference the merge target as fork base (and stay byte-identical when target === default)', () => {
+  const def = { repo: 'o/r', defaultBranch: 'main', umbrella: 99 };
+  const same = { ...def, targetBranch: 'main' };
+  const integ = { ...def, targetBranch: 'integration/foo' };
+
+  // target !== default: each builder names the target as the branch to fork off.
+  assert.match(canonicalPrompts.planPrompt(integ, planIssue, briefText), /git fetch origin integration\/foo -q/);
+  assert.match(canonicalPrompts.workPrompt(integ, node), /Create a branch off fresh `integration\/foo`/);
+  assert.match(canonicalPrompts.autofixPrompt(integ, autofixTr), /Branch off fresh `integration\/foo`/);
+  // and NOT the default branch as a fork base.
+  assert.doesNotMatch(canonicalPrompts.workPrompt(integ, node), /Create a branch off fresh `main`/);
+  assert.doesNotMatch(canonicalPrompts.autofixPrompt(integ, autofixTr), /Branch off fresh `main`/);
+
+  // target === default: byte-identical to the absent-target rendering.
+  assert.equal(canonicalPrompts.planPrompt(same, planIssue, briefText), canonicalPrompts.planPrompt(def, planIssue, briefText));
+  assert.equal(canonicalPrompts.workPrompt(same, node), canonicalPrompts.workPrompt(def, node));
+  assert.equal(canonicalPrompts.autofixPrompt(same, autofixTr), canonicalPrompts.autofixPrompt(def, autofixTr));
 });

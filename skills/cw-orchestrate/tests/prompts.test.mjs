@@ -8,8 +8,10 @@
 //      accidental drift in the no-op path (the self-modifying-run safety bar).
 //   2. INTEGRATION RETARGET: with a distinct `targetBranch`, the merge target,
 //      merge-tree base, conflict cause, post-merge tip, and triage shipped-code
-//      references point at the target — while the freshness base (work branch-off,
-//      the fetch's freshness leg) stays on `defaultBranch`.
+//      references point at the target — AND the fork base for plan/work/autofix
+//      moves to the target too (it carries the run's accumulated work, kept fresh
+//      from `defaultBranch` by the Step 4.5 ensure). The merge-tree's freshness
+//      leg of the fetch still names `defaultBranch`.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,7 +19,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import { workPrompt, mergePrompt, triagePrompt, mergeTarget } from '../prompts.mjs';
+import { planPrompt, workPrompt, mergePrompt, triagePrompt, autofixPrompt, mergeTarget } from '../prompts.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const goldens = JSON.parse(readFileSync(join(here, 'prompts.goldens.json'), 'utf8'));
@@ -91,21 +93,81 @@ test('mergePrompt retargets the merge target, merge-tree base, cause and tip', (
   assert.equal((p.match(/\bmain\b/g) || []).length, 1);
 });
 
-test('workPrompt branches off the freshness base but opens the PR against the target', () => {
+test('workPrompt forks off the merge target and opens the PR against it', () => {
   const p = workPrompt(integ, node);
-  // Freshness: branch off + build against defaultBranch.
-  assert.ok(p.includes('Create a branch off fresh `main`'));
+  // Fork base: the implementing subagent branches off the merge target, which
+  // carries the run's accumulated work — NOT the default branch.
+  assert.ok(p.includes('Create a branch off fresh `integration/foo`'));
+  assert.ok(!p.includes('Create a branch off fresh `main`'));
+  // The default branch is still surfaced as the conventional base for prose.
   assert.ok(p.includes('base main'));
   // Merge target: the PR must be opened against the target, else the squash
   // lands on the wrong branch.
   assert.ok(p.includes('gh pr create --base integration/foo'));
-  assert.ok(p.includes('the PR must land on `integration/foo`'));
+  // The parenthetical names the target as fork base + the freshness source.
+  assert.ok(p.includes('you branched off `integration/foo`'));
+  assert.ok(p.includes('kept fresh from `main`'));
 });
 
 test('workPrompt omits the --base clause entirely when target === defaultBranch (byte-identity)', () => {
   const p = workPrompt({ ...baseManifest, targetBranch: 'main' }, node);
   assert.ok(!p.includes('gh pr create --base'));
   assert.equal(p, goldens.workPrompt);
+});
+
+// --- planPrompt: fork-base grounding ---
+
+const planIssue = { number: 7, title: 'Title' };
+const briefText = 'BRIEF';
+
+test('planPrompt grounds against defaultBranch when no target is set', () => {
+  const p = planPrompt(baseManifest, planIssue, briefText);
+  assert.ok(p.includes('git fetch origin main -q'));
+  assert.ok(p.includes('read the relevant files at `origin/main` HEAD'));
+});
+
+test('planPrompt grounds against the merge target when set', () => {
+  const p = planPrompt(integ, planIssue, briefText);
+  assert.ok(p.includes('git fetch origin integration/foo -q'));
+  assert.ok(p.includes('read the relevant files at `origin/integration/foo` HEAD'));
+});
+
+test('planPrompt with target === defaultBranch is byte-identical to absent', () => {
+  assert.equal(
+    planPrompt({ ...baseManifest, targetBranch: 'main' }, planIssue, briefText),
+    planPrompt(baseManifest, planIssue, briefText),
+  );
+});
+
+// --- autofixPrompt: fork + freshness precheck against the target ---
+
+const autofixTr = {
+  residual_issue: 1010,
+  sub_issue: 984,
+  findings: [{ title: 'A', verdict: 'FIX_NOW', confidence: 'high', fix_hint: 'do A', rationale: 'because A' }],
+};
+
+test('autofixPrompt forks + prechecks against defaultBranch when no target is set', () => {
+  const p = autofixPrompt(baseManifest, autofixTr);
+  assert.ok(p.includes('Branch off fresh `main`'));
+  assert.ok(p.includes('git fetch origin main -q'));
+  assert.ok(p.includes('already landed on main'));
+});
+
+test('autofixPrompt forks + prechecks against the merge target when set', () => {
+  const p = autofixPrompt(integ, autofixTr);
+  assert.ok(p.includes('Branch off fresh `integration/foo`'));
+  assert.ok(!p.includes('Branch off fresh `main`'));
+  assert.ok(p.includes('git fetch origin integration/foo -q'));
+  assert.ok(p.includes('already landed on integration/foo'));
+  assert.ok(p.includes('already present (an equivalent guard'));
+});
+
+test('autofixPrompt with target === defaultBranch is byte-identical to absent', () => {
+  assert.equal(
+    autofixPrompt({ ...baseManifest, targetBranch: 'main' }, autofixTr),
+    autofixPrompt(baseManifest, autofixTr),
+  );
 });
 
 test('triagePrompt shipped-code references point at the target', () => {
