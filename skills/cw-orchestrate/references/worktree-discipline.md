@@ -19,8 +19,9 @@ Run many agents at once and this compounds: the primary checkout ends up parked 
 - **Every code-writing subagent runs with `isolation: 'worktree'`** — `cw-orchestrate` work + autofix, `cw-ship` build, `cw-sweep` autofix. Implementation happens on a feature branch inside a `wf_<runId>-NN` worktree, never on the primary checkout.
 - **Merges are server-side** (`gh pr merge --squash --admin --delete-branch`); the local default branch is only ever advanced by `git fetch` / `git pull --ff-only` / `git merge --ff-only`.
 - **The post-run cleanup heals the primary checkout** — `cw-ship` Step 5, `cw-sweep` Step 5, `cw-orchestrate` Step 8 remove the run's worktrees (merge-state gated) and fast-forward the primary checkout's default branch back to `origin`. The primary checkout always heals to `<defaultBranch>` by fast-forward, so the fast-forward-mirror invariant above is never broken.
+- **The gh-only subagents leave no scratch behind.** The agents that don't write code — discover, plan, triage, review, merge, park, file-residual, file-umbrella — run *without* `isolation: 'worktree'`, so their working directory **is** the primary checkout. They make no commits, but they must also write **no files** there: any that needs a scratch file (the park / park-residual flows fetch an issue body, append a block, and edit it back) creates a private `mktemp -d` dir and keeps every file inside it. A per-agent temp dir is both collision-free under concurrency and invisible to the checkout. (Regression: park subagents once wrote `title-N.md` / `body-N.md` into the primary checkout and never cleaned them up — see `cw-ship/tests/park-prompt.test.mjs`.)
 
-So the skills' own flows never pollute the primary checkout. The remaining risk is **other** agents — interactive sessions, ad-hoc tooling — that skip a worktree and commit in place.
+So the skills' own flows never pollute the primary checkout — neither with commits nor with stray scratch files. The remaining risk is **other** agents — interactive sessions, ad-hoc tooling — that skip a worktree and commit in place.
 
 ## The backstop: a pre-commit hook in the target repo
 

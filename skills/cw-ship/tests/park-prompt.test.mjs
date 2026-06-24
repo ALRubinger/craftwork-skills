@@ -1,11 +1,19 @@
-// Regression guard for feedback #8: the Resolve stage runs park subagents in
-// PARALLEL over a SHARED working tree (no isolation: 'worktree'). The old
-// parkPrompt told every subagent to fetch its issue body into a FIXED filename
-// `body.md`, so two concurrent parks raced on the same path — A wrote #1206's
-// body, B clobbered it with #1190's, then A appended its open-questions and
-// pushed #1190's content onto #1206. The fix: route the write-back through a
-// per-issue, collision-free sink and add a title/Observation match guard that
-// aborts the write when the read was contaminated.
+// Regression guard for feedback #8 and the scratch-leak audit. The Resolve stage
+// runs park subagents in PARALLEL, and they DON'T get isolation:'worktree' — they
+// share the workflow's working directory, which is the operator's PRIMARY checkout.
+//
+// Two failures had to be designed out:
+//   1. Collision: the original parkPrompt fetched every issue body into a FIXED
+//      filename `body.md`, so two concurrent parks raced on the same path — A wrote
+//      #1206's body, B clobbered it with #1190's, then A pushed #1190's content
+//      onto #1206. An interim fix keyed the files per-issue (body-${p.issue}.md).
+//   2. Leak: BOTH the shared and the per-issue files were written into the primary
+//      checkout and never cleaned up, leaving stray title-N.md / body-N.md behind.
+//
+// The fix that closes both: each subagent creates a PRIVATE temp dir (mktemp -d)
+// and keeps all scratch inside it. A per-agent dir is collision-free (no sibling
+// can clobber it) AND leaves the primary checkout pristine. The title/Observation
+// match guard that aborts a contaminated write is retained.
 //
 // parkPrompt is a non-exported template-string builder inside workflow.js, so —
 // like mirror.test.mjs — we assert against the extracted source of that builder.
@@ -35,33 +43,48 @@ function extractParkPrompt(src) {
 
 const parkPromptSrc = extractParkPrompt(workflowSrc);
 
-test('parkPrompt no longer routes the body through a shared `body.md` file', () => {
-  // The shared mutable filename is the exact collision the operator hit; it must
-  // be gone entirely (not as a destination, not as a --body-file argument).
-  assert.ok(
-    !/\bbody\.md\b/.test(parkPromptSrc),
-    'parkPrompt still references the shared `body.md` filename — concurrent park subagents would race on it',
+test('parkPrompt creates a private temp dir for all scratch', () => {
+  // mktemp -d gives each concurrent subagent its own directory, so it can use
+  // fixed filenames inside it without colliding and without touching the checkout.
+  assert.match(
+    parkPromptSrc,
+    /mktemp -d/,
+    'parkPrompt must create a private scratch dir (mktemp -d) so it writes nothing into the primary checkout',
   );
 });
 
-test('parkPrompt routes the body through a per-issue, collision-free sink', () => {
-  // A per-issue-keyed path or process substitution makes the sink unique per
-  // subagent so two concurrent parks cannot clobber each other.
-  const perIssuePath = /body-\$\{p\.issue\}\.md/.test(parkPromptSrc);
-  const processSubstitution = /--body-file\s+<\(/.test(parkPromptSrc);
-  assert.ok(
-    perIssuePath || processSubstitution,
-    'parkPrompt must write back via a per-issue path (body-${p.issue}.md) or process substitution (--body-file <(...))',
+test('parkPrompt writes NO scratch into the working checkout — every .md sink is under the temp dir', () => {
+  // The leak the audit found: title-N.md / body-N.md written into the operator's
+  // primary checkout. Every redirect (`> …`) and every --body-file argument that
+  // targets a .md file must live under the private temp dir ($D), never a bare
+  // filename in the working directory.
+  const sinks = [...parkPromptSrc.matchAll(/(?:>|--body-file)\s+("?\\?\$?[^\s`]*\.md)/g)].map(
+    (m) => m[1],
   );
+  assert.ok(
+    sinks.length >= 3,
+    'expected at least the title fetch, body fetch, and --body-file write-back sinks',
+  );
+  for (const sink of sinks) {
+    assert.match(
+      sink,
+      /\$D\//,
+      `scratch sink ${sink} must be under the private temp dir ($D/…), not the primary checkout`,
+    );
+  }
 });
 
-test('the --body-file write-back targets a per-issue sink, not a shared file', () => {
-  const m = parkPromptSrc.match(/--body-file\s+(\S+)/);
-  assert.ok(m, 'parkPrompt must still write the body back with gh issue edit --body-file');
-  const target = m[1];
-  assert.notEqual(target, 'body.md', '--body-file must not target the shared body.md');
-  const perIssue = target.includes('${p.issue}') || target.startsWith('<(');
-  assert.ok(perIssue, `--body-file target ${target} must be per-issue-unique or process substitution`);
+test('the old per-issue / shared filenames are gone from the working dir', () => {
+  // Neither the original shared `body.md` nor the interim per-issue body-${p.issue}.md
+  // may survive as a bare working-dir path.
+  assert.ok(
+    !/body-\$\{p\.issue\}\.md/.test(parkPromptSrc),
+    'interim per-issue scratch filename body-${p.issue}.md must be replaced by a temp-dir path',
+  );
+  assert.ok(
+    !/title-\$\{p\.issue\}\.md/.test(parkPromptSrc),
+    'interim per-issue scratch filename title-${p.issue}.md must be replaced by a temp-dir path',
+  );
 });
 
 test('parkPrompt adds a title/Observation match guard that aborts a contaminated write', () => {

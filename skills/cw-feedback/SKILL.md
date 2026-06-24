@@ -104,10 +104,12 @@ Build the body from the [issue template](./references/issue-template.md): a one-
 File it with both labels, using `--body-file` (never hand-escape backticks or checklists):
 
 ```sh
+D="$(mktemp -d)"                 # build the body here, never into the working checkout
+# …write the assembled body to "$D/body.md"…
 gh issue create --repo <repo> \
   --title "<kind>: <imperative summary>" \
   --label cw-feedback --label cw-feedback:new \
-  --body-file <body.md>
+  --body-file "$D/body.md"
 ```
 
 Report back the issue URL and a one-line summary of what you captured, and tell the user it'll be picked up on the next `/cw-ship` loop. That's the whole job — do not start working the issue.
@@ -117,10 +119,12 @@ Report back the issue URL and a one-line summary of what you captured, and tell 
 If the user signals the feedback should be **cataloged but not acted on yet** — "put this on hold", "keep it in the backlog", "not actionable yet", "file it but don't ship it" — file it in the **held** state instead: same body, but swap the entry label so it is `cw-feedback` + `cw-feedback:hold` and carries **no** `cw-feedback:new`.
 
 ```sh
+D="$(mktemp -d)"                 # build the body here, never into the working checkout
+# …write the assembled body to "$D/body.md"…
 gh issue create --repo <repo> \
   --title "<kind>: <imperative summary>" \
   --label cw-feedback --label cw-feedback:hold \
-  --body-file <body.md>
+  --body-file "$D/body.md"
 ```
 
 `cw-feedback:hold` is a mutually-exclusive **state** label: a held issue carries it and no other state label (`:new`/`:triaging`/`:needs-input`/`:go`). cw-ship's discovery never lists `cw-feedback:hold`, so a held issue sits in the backlog, fully cataloged, invisible to the loop until released.
