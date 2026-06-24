@@ -6,9 +6,7 @@
 // so both skills classify residuals the same way. cw-sweep additionally drives a
 // human-decision park/resolve/go loop the in-run cw-orchestrate path does not, so
 // this copy EXTENDS the shared logic: escalations() carries the recommendation
-// fields and skips unshipped residuals, and parkCandidates() + targetMismatches()
-// are cw-sweep-only (cw-sweep mixes residuals from different umbrellas, so it
-// derives a per-residual integration target and diagnoses base/target drift).
+// fields and skips unshipped residuals, and parkCandidates() is cw-sweep-only.
 // (The escalations shipped-guard is a no-op in-run, where residuals are always
 // freshly shipped.) `workflow.js` inlines a byte-for-byte mirror of every
 // function here (a Workflow script cannot import at runtime); mirror.test.mjs
@@ -157,41 +155,4 @@ export function deferredResiduals(results) {
     .filter((r) => r.shipped === false)
     .map((r) => r.residual_issue)
     .sort((a, b) => a - b);
-}
-
-/**
- * SOFT diagnostic: residuals whose autofix PR landed (or was opened) against a
- * base branch that DISAGREES with the per-residual target derived from the
- * umbrella's cw-target:<slug> label. cw-sweep mixes residuals from different
- * umbrellas in one run, so each carries its own target_branch (integration/<slug>
- * or the default branch); if an autofix subagent forked the wrong base, the fix
- * lands on the wrong branch. This is a report-only signal (a Step 3 section,
- * surfaced for the operator) — it never aborts the run, is NOT an escalation
- * (no operator decision is owed), and is NOT folded into an autofixed[].cause.
- *
- * Each record must carry target_branch (the derived target) and actual_base (the
- * PR's real base). A mismatch is emitted only when BOTH are present, non-empty,
- * and unequal — a missing/absent base (e.g. the autofix subagent never opened a
- * PR, or an older runtime that didn't report it) is not a mismatch.
- * @param {Array<{residual_issue:number, sub_issue?:number, target_branch?:string|null, actual_base?:string|null}>} records
- * @returns {Array<{residual_issue:number, sub_issue:number|null, target_branch:string, actual_base:string}>}
- */
-export function targetMismatches(records) {
-  return (records || [])
-    .filter(Boolean)
-    .filter(
-      (r) =>
-        typeof r.target_branch === 'string' &&
-        r.target_branch !== '' &&
-        typeof r.actual_base === 'string' &&
-        r.actual_base !== '' &&
-        r.target_branch !== r.actual_base,
-    )
-    .map((r) => ({
-      residual_issue: r.residual_issue,
-      sub_issue: r.sub_issue ?? null,
-      target_branch: r.target_branch,
-      actual_base: r.actual_base,
-    }))
-    .sort((a, b) => a.residual_issue - b.residual_issue);
 }

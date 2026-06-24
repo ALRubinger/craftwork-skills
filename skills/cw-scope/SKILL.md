@@ -47,7 +47,7 @@ This skill does **not** write briefs or a manifest. It makes the GitHub bodies s
 ## Reference files
 
 - [references/decision-preflight.md](./references/decision-preflight.md) — how to find and resolve the plan-blocking forks so the sweep routes everything `ready`. This is the heart of the skill.
-- [references/issue-templates.md](./references/issue-templates.md) — the umbrella-body and sub-issue-body shapes, plus the GitHub creation recipe (convention detection, placeholder backfill, parent linkage). Also documents the **`integration/<slug>` integration-branch targeting** convention (the `cw-target:<slug>` label and how the branch name derives from it).
+- [references/issue-templates.md](./references/issue-templates.md) — the umbrella-body and sub-issue-body shapes, plus the GitHub creation recipe (convention detection, placeholder backfill, parent linkage).
 
 The skill is executable from `SKILL.md` alone; the references carry detail.
 
@@ -117,27 +117,6 @@ Then create the issues per the [creation recipe](./references/issue-templates.md
 
 Always use `--body-file` (or a quoted heredoc) — never hand-escape backticks.
 
-### Step 6.5: Offer integration-branch targeting (optional, opt-in)
-
-Now that the umbrella exists as a real issue number, **offer** — do not default — to mark it as an integration-branch target. This is purely additive: **absent the label, scope and downstream orchestrate behavior are byte-identical to today.** Decline leaves the flow unchanged.
-
-Ask via `AskUserQuestion` whether this initiative should land on a shared integration branch (recommend it when the umbrella's sub-issues build on each other toward one cohesive feature; skip it for independent one-off fixes). On accept:
-
-1. **Derive a git-ref-safe slug.** The slug is the suffix of both the label `cw-target:<slug>` and the branch `integration/<slug>`, so it must be a valid git ref segment: lowercase, hyphen-separated, no spaces or slashes. (Example: slug `integration-targeting` → label `cw-target:integration-targeting`, branch `integration/integration-targeting`.)
-2. **Create the label** (idempotent — if it already exists, skip or update its description), putting the human-readable note in the **label description**:
-   ```bash
-   gh label create "cw-target:<slug>" --description "<human note>" \
-     || gh label edit "cw-target:<slug>" --description "<human note>"
-   ```
-3. **Apply it to the umbrella:**
-   ```bash
-   gh issue edit "$UMB" --add-label "cw-target:<slug>"
-   ```
-
-The label on the umbrella is the **single source of truth** for the target — it both declares the target *and* is the grouping key. **Write nothing into the issue body** (no body field, no duplicated state). The branch `integration/<slug>` is **derived deterministically** from the slug — never stored separately. **Sub-issues inherit** the target from the umbrella's label; do **not** add per-sub-issue labels.
-
-See the [integration-branch targeting section](./references/issue-templates.md#integration-branch-targeting-cw-targetslug) for the full convention.
-
 ### Step 7: Handoff
 
 Report the created tree (umbrella + sub-issues, with links) and print the exact next invocation: `/cw-orchestrate <umbrella-number>` (optionally with `--only <n>` for a de-risked first run on a dependency-free sub-issue).
@@ -153,5 +132,4 @@ If this initiative changed a decision recorded in durable memory (e.g. a default
 - **Own sub-issues are always native; mirror only the *up*-link.** A cw-skill umbrella tracks its own children as GitHub native sub-issues, full stop — no body checklist, no duplicated title list. The detect-and-match rule applies only to linking the umbrella *up* into a parent you don't own: don't impose native sub-issues on a human milestone that tracks children by body checklist (or vice versa).
 - **`gh`/`git` via Bash**, not MCP — matches orchestrate and survives headless contexts.
 - **Confirm before creating.** Issue creation is shared-state; Step 6 is the gate.
-- **Integration targeting is an offer, not a default.** The `cw-target:<slug>` label on the umbrella is the single source of truth for the target (no body field, no per-sub-issue labels); the branch `integration/<slug>` derives from the slug. Absent the label, scope and orchestrate behavior are unchanged — Step 6.5 only ever adds.
 - **Interactive by design.** No background Workflow — the value is the human-in-the-loop decision resolution that makes the downstream run hands-off.

@@ -12,7 +12,7 @@
     {
       "name": "craftwork",
       "source": "./",
-      "description": "Capture an observation, let the loop ship it, decide only the forks it cannot. cw-feedback / cw-ship / cw-resolve plus the cw-scope / cw-orchestrate / cw-promote / cw-sweep initiative track.",
+      "description": "Capture an observation, let the loop ship it, decide only the forks it cannot. cw-feedback / cw-ship / cw-resolve plus the cw-scope / cw-orchestrate / cw-sweep initiative track.",
       "version": "0.1.0"
     }
   ]

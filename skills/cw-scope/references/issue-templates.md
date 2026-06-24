@@ -94,29 +94,6 @@ should understand the initiative from this alone. Plain prose, no jargon.>
 <Embed the brainstorm/requirements content here — see "Embedding requirements" below.>
 ```
 
-## Integration-branch targeting (`cw-target:<slug>`)
-
-An umbrella whose sub-issues build toward one cohesive feature can be marked to land on a **shared integration branch** instead of merging each PR straight to the default branch. This is offered interactively in **Step 6.5 of SKILL.md** and is **opt-in**: absent the label, scope and orchestrate behavior are unchanged — the label is purely additive.
-
-The convention:
-
-- **The `cw-target:<slug>` label on the umbrella is the single source of truth** for the target. It both *declares* the target and is the *grouping key*. There is **no body field** — nothing about the target is written into the issue body (honors the repo's no-duplicated-state rule). This is orthogonal to, and does not conflict with, the rule that the **native sub-issue widget** is the single source of truth for the *child set*: the label is the source of truth for the *target*, the widget for the *children* — two different concerns.
-- **The human-readable note lives in the label description**, not the body: `gh label create cw-target:<slug> --description "<human note>"`.
-- **The branch derives deterministically** as `integration/<slug>` — never stored separately. The `<slug>` is the suffix of both the label and the branch, so it must be a **git-ref-safe segment**: lowercase, hyphen-separated, no spaces or slashes. Example: `cw-target:integration-targeting` → branch `integration/integration-targeting`.
-- **Sub-issues inherit** the target from the umbrella's label. There are **no per-sub-issue labels** — a sub-issue's target is whatever its umbrella declares.
-
-Creation recipe (idempotent — re-running is safe):
-
-```bash
-# Create the label with the human note in its description (or update if it exists):
-gh label create "cw-target:<slug>" --description "<human note>" \
-  || gh label edit "cw-target:<slug>" --description "<human note>"
-# Apply it to the umbrella (and only the umbrella):
-gh issue edit "$UMB" --add-label "cw-target:<slug>"
-```
-
-A reader following this recipe ends with the label on the umbrella and **nothing in the body**.
-
 ## Embedding requirements (don't link a path readers can't reach)
 
 A GitHub issue is read on github.com, where a repo-relative path like
