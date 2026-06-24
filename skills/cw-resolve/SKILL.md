@@ -84,9 +84,10 @@ Always allow **skip** — if the user isn't ready to decide an issue, leave it `
 For each answered issue, rewrite the parked block in place so the answers are unambiguous to the headless planner that re-reads it next run. Fetch, edit, push with `--body-file` (never hand-escape):
 
 ```sh
-gh issue view <n> --repo <repo> --json body -q .body > body.md
-# edit body.md
-gh issue edit <n> --repo <repo> --body-file body.md
+D="$(mktemp -d)"                                                  # scratch outside the checkout
+gh issue view <n> --repo <repo> --json body -q .body > "$D/body.md"
+# edit "$D/body.md"
+gh issue edit <n> --repo <repo> --body-file "$D/body.md"
 ```
 
 - **Open questions / Decision needed:** under each question or decision, add an `**Answer:** <decision>` line (and a one-line rationale if it matters for edge cases). Leave the questions visible so the trail is auditable.

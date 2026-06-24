@@ -149,18 +149,18 @@ Keep implementation design out of these bodies **except** where a decision is th
 
 GitHub issue numbers don't exist until creation, so create then backfill cross-references. Write each body to a scratch file and create with `--body-file` — never hand-escape backticks.
 
-1. **Write body files** to a scratch dir (e.g. `mktemp -d`). Use placeholder tokens for not-yet-known numbers: `#__UMBRELLA__`, `#__SUB1__` … `#__SUBn__`.
+1. **Write body files** to a private scratch dir so nothing lands in the checkout: `D="$(mktemp -d)"`, then write each body to `"$D/umbrella.md"`, `"$D/sub1.md"`, … Use placeholder tokens for not-yet-known numbers: `#__UMBRELLA__`, `#__SUB1__` … `#__SUBn__`.
 
 2. **Create the umbrella first** and capture its number and GraphQL node id (the node id is what native linking needs):
    ```bash
-   UMB=$(gh issue create --title "<umbrella title>" --body-file umbrella.md [--label <label>] | grep -oE '[0-9]+$')
+   UMB=$(gh issue create --title "<umbrella title>" --body-file "$D/umbrella.md" [--label <label>] | grep -oE '[0-9]+$')
    UMB_ID=$(gh issue view "$UMB" --json id -q .id)
    ```
 
 3. **Create each sub-issue.** Replace `#__UMBRELLA__` in the sub-issue files with `$UMB` before creating, then capture each number:
    ```bash
-   sed -i '' "s/__UMBRELLA__/$UMB/g" sub*.md       # macOS sed; GNU: sed -i
-   S1=$(gh issue create --title "<sub1 title>" --body-file sub1.md | grep -oE '[0-9]+$')
+   sed -i '' "s/__UMBRELLA__/$UMB/g" "$D"/sub*.md   # macOS sed; GNU: sed -i
+   S1=$(gh issue create --title "<sub1 title>" --body-file "$D/sub1.md" | grep -oE '[0-9]+$')
    # ...repeat for S2..Sn
    ```
 
@@ -176,11 +176,11 @@ GitHub issue numbers don't exist until creation, so create then backfill cross-r
 
 5. **Backfill sibling cross-references.** Replace `#__SUBn__` placeholders in the umbrella's `## Recommended dependencies` section and in any sub-issue `## Dependency` line, then re-upload the corrected bodies:
    ```bash
-   sed -i '' "s/__SUB1__/$S1/g; s/__SUB2__/$S2/g; ..." umbrella.md sub2.md ...
-   gh issue edit "$UMB" --body-file umbrella.md
-   gh issue edit "$S2"  --body-file sub2.md
+   sed -i '' "s/__SUB1__/$S1/g; s/__SUB2__/$S2/g; ..." "$D/umbrella.md" "$D/sub2.md" ...
+   gh issue edit "$UMB" --body-file "$D/umbrella.md"
+   gh issue edit "$S2"  --body-file "$D/sub2.md"
    # verify none remain:
-   grep -l "__SUB\|__UMBRELLA__" *.md || echo clean
+   grep -l "__SUB\|__UMBRELLA__" "$D"/*.md || echo clean
    ```
 
 6. **Link the umbrella up to its own parent** (only if it is a child of an existing milestone/epic), mirroring *that parent's* convention — see "Detecting the parent's linking convention" below. This is the one place a `- [ ]` checklist may still be written: into a human milestone we don't own.

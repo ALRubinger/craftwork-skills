@@ -361,13 +361,14 @@ const parkPrompt = (a, p, reason) => `You are PARKING one feedback issue for the
 
 Reason: ${reason === 'umbrella-scope' ? 'this feedback is umbrella-sized and needs the operator to approve a proposed scope before it is filed and executed.' : 'a design fork remains that only the operator should decide.'}
 
-IMPORTANT — you run CONCURRENTLY with other park subagents in a SHARED working tree. Never write to a fixed, shared filename: a sibling parking a different issue would clobber it and you'd push the wrong issue's body. Key every file you touch by THIS issue number (#${p.issue}) so no two subagents collide.
+IMPORTANT — you run CONCURRENTLY with other park subagents that share the workflow's working directory (the operator's PRIMARY checkout). Write NO scratch into that checkout: as your FIRST step create a private temp dir (\`D=\"\$(mktemp -d)\"\`) and keep every file you touch inside it. A private per-agent dir is collision-free — no sibling can clobber your files — AND leaves the primary checkout pristine. Never redirect into a bare filename in the working dir.
 
 Steps:
-1. Fetch the current title AND body for THIS issue into per-issue, collision-free files:
-   \`gh issue view ${p.issue} --repo ${a.repo} --json title -q .title > title-${p.issue}.md\`
-   \`gh issue view ${p.issue} --repo ${a.repo} --json body -q .body > body-${p.issue}.md\`
-2. Append (do not overwrite) a block to body-${p.issue}.md:
+1. Create your scratch dir, then fetch the current title AND body for THIS issue into it:
+   \`D=\"\$(mktemp -d)\"\`
+   \`gh issue view ${p.issue} --repo ${a.repo} --json title -q .title > \"\$D/title.md\"\`
+   \`gh issue view ${p.issue} --repo ${a.repo} --json body -q .body > \"\$D/body.md\"\`
+2. Append (do not overwrite) a block to \"\$D/body.md\":
 ${
   reason === 'umbrella-scope'
     ? `   "## Proposed umbrella scope" followed by the title + why + a checklist of the proposed sub-issues from this scope:
@@ -377,7 +378,7 @@ ${JSON.stringify(p.plan.umbrella_scope, null, 2)}
 ${JSON.stringify(p.plan.open_questions || [], null, 2)}
    End with: "_To proceed: answer each question inline above, then add the \\\`cw-feedback:go\\\` label._"`
 }
-3. GUARD before you push — detect a contaminated read instead of compounding it. Re-fetch this issue's current title (\`gh issue view ${p.issue} --repo ${a.repo} --json title -q .title\`) and confirm it equals the contents of title-${p.issue}.md. Then confirm body-${p.issue}.md still leads with THIS issue's body — its leading content must match the body you fetched for #${p.issue} (i.e. it begins with #${p.issue}'s original Observation / body text, with ONLY your appended block added at the end and no other issue's content). If either check fails — the title differs, the body no longer matches #${p.issue}, or a foreign Observation or a duplicate appended block is present — ABORT the write: do NOT run \`gh issue edit\`, and return { issue: ${p.issue}, parked: false, reason: "<which check failed>" } where the reason names the specific guard failure (e.g. "guard-abort: title mismatch", "guard-abort: body contaminated", "guard-abort: duplicate block") rather than the park reason, so the cause is legible. Only when both checks pass, write back: \`gh issue edit ${p.issue} --repo ${a.repo} --body-file body-${p.issue}.md\` (never hand-escape backticks or checklists).
+3. GUARD before you push — detect a contaminated read instead of compounding it. Re-fetch this issue's current title (\`gh issue view ${p.issue} --repo ${a.repo} --json title -q .title\`) and confirm it equals the contents of \"\$D/title.md\". Then confirm \"\$D/body.md\" still leads with THIS issue's body — its leading content must match the body you fetched for #${p.issue} (i.e. it begins with #${p.issue}'s original Observation / body text, with ONLY your appended block added at the end and no other issue's content). If either check fails — the title differs, the body no longer matches #${p.issue}, or a foreign Observation or a duplicate appended block is present — ABORT the write: do NOT run \`gh issue edit\`, and return { issue: ${p.issue}, parked: false, reason: "<which check failed>" } where the reason names the specific guard failure (e.g. "guard-abort: title mismatch", "guard-abort: body contaminated", "guard-abort: duplicate block") rather than the park reason, so the cause is legible. Only when both checks pass, write back: \`gh issue edit ${p.issue} --repo ${a.repo} --body-file \"\$D/body.md\"\` (never hand-escape backticks or checklists).
 4. Flip labels to the parked state: \`gh issue edit ${p.issue} --repo ${a.repo} --add-label cw-feedback:needs-input --remove-label cw-feedback:triaging\` (create cw-feedback:needs-input first if missing: color D93F0B). Do NOT add cw-feedback:go — that is the operator's action.
 5. RELEASE the claim: parking hands the issue back to the operator, so delete this run's claim comment${p.plan.claim_comment_id ? ` (\`gh api -X DELETE repos/${a.repo}/issues/comments/${p.plan.claim_comment_id} 2>/dev/null || true\`)` : ' if one exists'}. Leaving it would make the next run (after the operator adds cw-feedback:go) see a stale live claim and yield.
 
