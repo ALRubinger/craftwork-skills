@@ -18,7 +18,7 @@ Run many agents at once and this compounds: the primary checkout ends up parked 
 
 - **Every code-writing subagent runs with `isolation: 'worktree'`** — `cw-orchestrate` work + autofix, `cw-ship` build, `cw-sweep` autofix. Implementation happens on a feature branch inside a `wf_<runId>-NN` worktree, never on the primary checkout.
 - **Merges are server-side** (`gh pr merge --squash --admin --delete-branch`); the local default branch is only ever advanced by `git fetch` / `git pull --ff-only` / `git merge --ff-only`.
-- **The post-run cleanup heals the primary checkout** — `cw-ship` Step 5, `cw-sweep` Step 5, `cw-orchestrate` Step 8 remove the run's worktrees (merge-state gated) and fast-forward the primary checkout's default branch back to `origin`. This holds on **every** run, including `cw-orchestrate`'s integration-target runs (`cw-target:<slug>`): the primary checkout always heals to `<defaultBranch>` by fast-forward, never to `integration/<slug>`. The integration branch is advanced separately, in a dedicated worktree — never by parking the primary checkout on it — so the fast-forward-mirror invariant above is never broken to chase a non-default merge target.
+- **The post-run cleanup heals the primary checkout** — `cw-ship` Step 5, `cw-sweep` Step 5, `cw-orchestrate` Step 8 remove the run's worktrees (merge-state gated) and fast-forward the primary checkout's default branch back to `origin`. The primary checkout always heals to `<defaultBranch>` by fast-forward, so the fast-forward-mirror invariant above is never broken.
 
 So the skills' own flows never pollute the primary checkout. The remaining risk is **other** agents — interactive sessions, ad-hoc tooling — that skip a worktree and commit in place.
 

@@ -47,7 +47,7 @@ Briefs and the manifest live under a **run-scoped working directory addressed by
 }
 ```
 
-**Base vs. target.** `defaultBranch` and `targetBranch` separate two roles that collapse to one branch in the common case. `targetBranch` (optional) is the *merge target AND the fork base* — the branch the squash-merge lands on, the branch the pre-merge `git merge-tree` conflict check diffs against, and the branch every plan/work/autofix subagent fetches and forks off. Forking off the target (not the default branch) is what lets each node build on the run's accumulated work. `defaultBranch` is the *freshness source* for the target: the Step 4.5 ensure merges it into `integration/<slug>` before launch, so the fork base is always at least as fresh as the default branch. When `targetBranch` is absent (null/undefined) it defaults to `defaultBranch`, target and base are the same branch, and every generated prompt is byte-identical to the single-branch behavior. Resolution uses `??` (nullish coalescing), so only an *absent* `targetBranch` falls back to `defaultBranch`; a *present* value is taken as-is. Invariant 5 (below) is what guarantees a present value is a non-empty branch name — the manifest validation rejects an empty string before "go", so the `??`-only fallback never has to defend against one at runtime.
+**The merge target is `defaultBranch`.** `defaultBranch` is the single branch every run uses: the squash-merge lands on it, the pre-merge `git merge-tree` conflict check diffs against it, and every plan/work/autofix subagent fetches and forks off it (so each node builds on the run's accumulated work — each predecessor's PR has already merged onto it).
 
 ### Field contract
 
@@ -55,8 +55,7 @@ Briefs and the manifest live under a **run-scoped working directory addressed by
 |-------|------|---------|
 | `umbrella` | number | Parent issue number. |
 | `repo` | string | `owner/name`, so subagents can target `gh` explicitly. |
-| `defaultBranch` | string | **Freshness source** (`main` for this repo family): merged into the merge target by the Step 4.5 ensure so the fork base stays fresh. Also the **merge target AND fork base** when `targetBranch` is absent. |
-| `targetBranch` | string (optional) | **Merge target AND fork base**: the branch the squash-merge lands on, that the pre-merge `git merge-tree` check diffs against, and that plan/work/autofix subagents fetch and fork off (so each node builds on the run's accumulated work). Defaults to `defaultBranch` when absent. Set it to land an umbrella's PRs on an integration/release branch; the Step 4.5 ensure merges `defaultBranch` in to keep this fork base fresh. |
+| `defaultBranch` | string | **Merge target AND fork base** (`main` for this repo family): the branch the squash-merge lands on, that the pre-merge `git merge-tree` check diffs against, and that plan/work/autofix subagents fetch and fork off. |
 | `runId` | string | Stable run identifier. **Minted in the main session** — the Workflow forbids `Date.now()`/`Math.random()`. |
 | `timestamp` | string (ISO 8601) | Run start. Also minted in the main session; passed through for any time-stamping the Workflow needs. |
 | `issues[]` | array | One entry per **ready** sub-issue (back-off issues are ready once their `ce-brainstorm` doc exists). |
@@ -71,7 +70,6 @@ Briefs and the manifest live under a **run-scoped working directory addressed by
 2. Every `depends_on` entry references a `number` present in `issues[]`.
 3. The `depends_on` edges form a **DAG** — no cycles. Reject a cycle with an error naming the participating issues. (The scheduler in `workflow.js` re-validates; catching it here keeps the operator in the loop.)
 4. `runId` and `timestamp` are present and non-empty (the Workflow depends on them for determinism).
-5. If `targetBranch` is present it is a non-empty string. (Absent is fine — it defaults to `defaultBranch`.)
 
 ## Brief contract
 

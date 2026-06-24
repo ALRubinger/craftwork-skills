@@ -47,7 +47,6 @@ for (const fn of [
   'escalations',
   'parkCandidates',
   'deferredResiduals',
-  'targetMismatches',
 ]) {
   test(`workflow.js mirror of ${fn} matches triage.mjs`, () => {
     const canonical = normalize(extractFunction(triageSrc, fn));

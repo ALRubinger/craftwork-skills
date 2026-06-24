@@ -20,16 +20,15 @@ cw-ship         the autonomous loop            -> build + merge, or park, or esc
 cw-resolve      answer the parked questions    -> clears work to run autonomously
 cw-scope        scope a large initiative       -> a ready umbrella of sub-issues
 cw-orchestrate  execute a scoped initiative    -> sub-issues driven to merged PRs
-cw-promote      land a proven integration branch -> one squash commit on main
 cw-sweep        clean up leftover review notes  -> a tidy backlog
 ```
 
 Two tracks share the same philosophy:
 
 - **Everyday track** - you hit a rough edge while using the product, run `cw-feedback`, and when you're ready you invoke `/cw-ship` to turn the backlog into merged changes. If an item needs a decision, it parks the question into the issue body and pings you; you answer with `cw-resolve` and the next run finishes it on its own.
-- **Initiative track** - for deliberate, multi-PR work you run `cw-scope` to shape it, then `cw-orchestrate` to drive it to done, with `cw-sweep` clearing the review residue. An integration-targeted initiative (one whose sub-issues build onto a shared `integration/<slug>` branch) finishes with `cw-promote`, which atomically lands that branch on `main` once the whole feature is proven.
+- **Initiative track** - for deliberate, multi-PR work you run `cw-scope` to shape it, then `cw-orchestrate` to drive it to done — each sub-issue squash-merging straight to `main` — with `cw-sweep` clearing the review residue.
 
-The split maps to the names: **Craft** is what you fire to capture and decide (`cw-feedback`, `cw-resolve`, `cw-scope`); **Work** is what runs hands-off to merge once you invoke it (`cw-ship`, `cw-orchestrate`, `cw-sweep`, `cw-promote`).
+The split maps to the names: **Craft** is what you fire to capture and decide (`cw-feedback`, `cw-resolve`, `cw-scope`); **Work** is what runs hands-off to merge once you invoke it (`cw-ship`, `cw-orchestrate`, `cw-sweep`).
 
 ## The skills
 
@@ -40,7 +39,6 @@ The split maps to the names: **Craft** is what you fire to capture and decide (`
 | [`cw-resolve`](skills/cw-resolve) | everyday | Walk you through the design questions the loop parked, record your answers, release the work. |
 | [`cw-scope`](skills/cw-scope) | initiative | Interactively scope a large initiative into a ready set of sub-issues. |
 | [`cw-orchestrate`](skills/cw-orchestrate) | initiative | Drive a scoped initiative's sub-issues to merged PRs, hands-off. |
-| [`cw-promote`](skills/cw-promote) | initiative | Atomically squash-promote a proven `integration/<slug>` branch into `main`, then close the umbrella and tear down the target. |
 | [`cw-sweep`](skills/cw-sweep) | initiative | Clean up the leftover review findings after an orchestrate run. |
 
 ## Install
@@ -73,7 +71,7 @@ task link -- --dry-run # preview; --force replaces conflicting links
 
 It's idempotent — re-run it after adding a skill so nothing goes stale. Use this on your authoring machine; use the marketplace on machines that only consume the suite (don't do both, or each skill loads twice).
 
-The Work-track skills (`cw-ship`, `cw-orchestrate`, `cw-sweep`, `cw-promote`) drive real merges via `gh`/`git` once you invoke them — `cw-ship` and `cw-orchestrate` are on-demand, and `cw-sweep` can optionally be put on a schedule. `cw-ship`, `cw-orchestrate`, and `cw-sweep` run hands-off to merge; `cw-promote` is the one operator-gated exception in the Work track — it lands a proven integration branch on `main` only after an explicit operator confirmation. Read each skill's `SKILL.md` before running it, and start with a dry run.
+The Work-track skills (`cw-ship`, `cw-orchestrate`, `cw-sweep`) drive real merges via `gh`/`git` once you invoke them — `cw-ship` and `cw-orchestrate` are on-demand, and `cw-sweep` can optionally be put on a schedule. All three run hands-off to merge. Read each skill's `SKILL.md` before running it, and start with a dry run.
 
 ## Running the loops
 

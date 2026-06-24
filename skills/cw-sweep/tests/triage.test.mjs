@@ -7,7 +7,6 @@ import {
   escalations,
   parkCandidates,
   deferredResiduals,
-  targetMismatches,
 } from '../triage.mjs';
 
 const f = (verdict, confidence, extra = {}) => ({
@@ -142,52 +141,4 @@ test('deferredResiduals: only unshipped sub-issues, ascending', () => {
     { residual_issue: 20, shipped: false },
   ];
   assert.deepEqual(deferredResiduals(results), [20, 40]);
-});
-
-test('targetMismatches: flags only records whose actual_base disagrees with target_branch', () => {
-  const records = [
-    // disagree -> mismatch
-    { residual_issue: 30, sub_issue: 300, target_branch: 'integration/foo', actual_base: 'main' },
-    // agree -> no mismatch
-    { residual_issue: 10, sub_issue: 100, target_branch: 'integration/bar', actual_base: 'integration/bar' },
-    // default-branch target, PR on main -> agree
-    { residual_issue: 20, sub_issue: 200, target_branch: 'main', actual_base: 'main' },
-    // disagree the other way -> mismatch
-    { residual_issue: 5, sub_issue: 50, target_branch: 'main', actual_base: 'integration/baz' },
-  ];
-  assert.deepEqual(targetMismatches(records), [
-    { residual_issue: 5, sub_issue: 50, target_branch: 'main', actual_base: 'integration/baz' },
-    { residual_issue: 30, sub_issue: 300, target_branch: 'integration/foo', actual_base: 'main' },
-  ]);
-});
-
-test('targetMismatches: a missing/empty actual_base is not a mismatch (no PR opened)', () => {
-  const records = [
-    { residual_issue: 1, target_branch: 'integration/foo', actual_base: null },
-    { residual_issue: 2, target_branch: 'integration/foo' }, // actual_base absent
-    { residual_issue: 3, target_branch: 'integration/foo', actual_base: '' },
-  ];
-  assert.deepEqual(targetMismatches(records), []);
-});
-
-test('targetMismatches: a missing/empty target_branch is not a mismatch', () => {
-  const records = [
-    { residual_issue: 1, target_branch: null, actual_base: 'main' },
-    { residual_issue: 2, actual_base: 'main' }, // target_branch absent
-    { residual_issue: 3, target_branch: '', actual_base: 'main' },
-  ];
-  assert.deepEqual(targetMismatches(records), []);
-});
-
-test('targetMismatches: sub_issue defaults to null when absent', () => {
-  const [m] = targetMismatches([
-    { residual_issue: 7, target_branch: 'integration/x', actual_base: 'main' },
-  ]);
-  assert.equal(m.sub_issue, null);
-});
-
-test('targetMismatches: tolerates null/empty', () => {
-  assert.deepEqual(targetMismatches([]), []);
-  assert.deepEqual(targetMismatches([null]), []);
-  assert.deepEqual(targetMismatches(undefined), []);
 });

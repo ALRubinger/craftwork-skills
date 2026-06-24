@@ -2,19 +2,19 @@
 
 The work stage runs in a **no-human window**: N worktree subagents producing PRs that merge to the default branch with nobody watching. Merge safety is the set of guarantees that make that window safe (R14, R15, R16). The governing principle: **`main` advances deterministically, one merge at a time, and never absorbs an unexpected conflict, a P0, or a red/pending CI run.**
 
-> **Base vs. target.** Two roles, one branch in the common case (see `manifest-schema.md`). The *merge target* — the branch the squash-merge lands on, that the pre-merge `git merge-tree` check diffs the PR branch against, AND that work subagents fork off (so each node builds on the run's accumulated work) — is `targetBranch`, which defaults to `defaultBranch`. `base` here means the *freshness source* (`defaultBranch`): the Step 4.5 ensure merges it into the merge target before launch so the fork base stays fresh, and the merge step re-fetches it only as the merge-tree dedup reference. When they differ (e.g. landing an umbrella's PRs on an integration branch), fork off / merge onto / merge-tree against `targetBranch`, with `defaultBranch` kept merged in for freshness. The shell snippet below makes this split explicit: `base` (the freshness source) and a distinct `target` (`${TARGET_BRANCH:-$DEFAULT_BRANCH}`, the merge-tree/merge target) are both fetched. When `TARGET_BRANCH` is unset, `target == base` and the snippet is identical to the single-branch case.
+Every run merges to `defaultBranch`. The merge target — the branch the squash-merge lands on, that the pre-merge `git merge-tree` check diffs the PR branch against, AND that work subagents fork off (so each node builds on the run's accumulated work) — is always `defaultBranch`.
 
 ## The six guarantees
 
 1. **Serialized merges (R14).** At most one node merges to the default branch at a time. The work role *builds* in parallel (each in its own worktree); the orchestrator *merges* serially. A single in-script merge step processed one node at a time is the lock — there is no concurrent `gh pr merge`.
 
-2. **Pre-merge conflict check (R14, AE5).** Immediately before each merge, re-fetch the merge target and run a real `git merge-tree` of the PR branch against the **fresh** target (`main` in the single-branch case, `integration/<slug>` on a target run). Scheduling used *predicted* ownership (set-intersection over plan ownership tables); this is the *actual* diff check. An unexpected conflict (one the schedule did not predict) → **halt and re-queue** the node rather than force-merging.
+2. **Pre-merge conflict check (R14, AE5).** Immediately before each merge, re-fetch `defaultBranch` and run a real `git merge-tree` of the PR branch against the **fresh** default branch. Scheduling used *predicted* ownership (set-intersection over plan ownership tables); this is the *actual* diff check. An unexpected conflict (one the schedule did not predict) → **halt and re-queue** the node rather than force-merging.
 
 3. **Pre-merge CI gate — wait for green, then merge (R14).** Before `gh pr merge`, the merge step blocks until the PR's own checks conclude (`gh pr checks --watch`) and merges **only** when every *blocking* check (build, unit/integration tests, lint, vet, type/Svelte check, smoke, security scans) concluded `success`. It never merges over a `pending` or failing blocking check — `--admin` bypasses required-review, not in-progress or failing validation. *Advisory* soft gates (coverage thresholds like `codecov/patch`/`codecov/project`; preview/deploy checks like a Railway `… - docs` deployment that reports `cancelled`) do not block; they are recorded in `ci.advisory_nonblocking` and the merge proceeds. A failing blocking check → the node does **not** merge and is stalled with the failing check named (the work step, not the merge step, owns fixing it). This gate is what keeps a regression a CI caught — but a local run did not — off `main`.
 
 4. **P0 code-review halt (R15).** The work role runs a code-review pass on its own diff. A P0 finding leaves the PR **open** and marks the node stalled — it never merges. Non-P0 findings file-and-proceed.
 
-5. **Dependents plan AND build on the fresh merge target (R16).** Execution is **per-node gated**, not barrier-waved: a node's whole chain (plan → work → merge) defers until every predecessor has merged onto the target. So a dependent both *plans* and *builds* against a target that already carries its prerequisites' merged code — it is never planned blind, up front, against a surface its prerequisite hasn't landed on yet. Each merge advances the target; eligible dependents then fork off the new tip (which is `main` in the single-branch case, `integration/<slug>` on a target run). A dependent that hits a conflict it cannot safely auto-resolve in a headless context → **halt the job and its dependents and file an issue** (no force-resolve).
+5. **Dependents plan AND build on the fresh default branch (R16).** Execution is **per-node gated**, not barrier-waved: a node's whole chain (plan → work → merge) defers until every predecessor has merged onto `defaultBranch`. So a dependent both *plans* and *builds* against a default branch that already carries its prerequisites' merged code — it is never planned blind, up front, against a surface its prerequisite hasn't landed on yet. Each merge advances `defaultBranch`; eligible dependents then fork off the new tip. A dependent that hits a conflict it cannot safely auto-resolve in a headless context → **halt the job and its dependents and file an issue** (no force-resolve).
 
 6. **No force-resolve, ever (R16).** A headless context must not pick a side of a conflict. Unresolvable rebase/merge conflicts halt; they do not get `-X ours`/`-X theirs`'d away.
 
@@ -43,16 +43,15 @@ Planning is gated on **declared deps only** — file-overlap is a merge-contenti
 Run per eligible node, serially. Operates on the **remote** PR (the branch was pushed by the work subagent), so no worktree is needed.
 
 ```bash
-repo="$REPO"; base="$DEFAULT_BRANCH"; target="${TARGET_BRANCH:-$DEFAULT_BRANCH}"; branch="$NODE_BRANCH"; pr="$NODE_PR"
+repo="$REPO"; base="$DEFAULT_BRANCH"; branch="$NODE_BRANCH"; pr="$NODE_PR"
 
-# 1. Re-fetch the freshness base, the merge target, and the PR branch.
-#    (When TARGET_BRANCH is unset, target == base and this is the same fetch as before.)
-git fetch origin "$base" "$target" "$branch"
+# 1. Re-fetch the default branch (the merge target) and the PR branch.
+git fetch origin "$base" "$branch"
 
-# 2. Pre-merge conflict check against the FRESH merge target (R14).
+# 2. Pre-merge conflict check against the FRESH default branch (R14).
 #    merge-tree exits non-zero / reports conflicts if the merge would conflict.
-if ! git merge-tree --write-tree --name-only "origin/$target" "origin/$branch" >/tmp/mt.out 2>&1; then
-    echo "HALT: pre-merge conflict for #$issue against fresh $target; re-queue (do not force-merge)"
+if ! git merge-tree --write-tree --name-only "origin/$base" "origin/$branch" >/tmp/mt.out 2>&1; then
+    echo "HALT: pre-merge conflict for #$issue against fresh $base; re-queue (do not force-merge)"
     # mark node stalled(cause="pre-merge conflict"); re-queue once, then halt + dependents if it recurs
     exit 0
 fi

@@ -80,12 +80,8 @@ function extractDeclExpr(src, name) {
 }
 
 async function workflowBuilder(name) {
-  // mergePrompt/triagePrompt close over the `mergeTarget` helper, so pull that
-  // dependency in too when compiling the builder out of the workflow.js text.
-  const helper = extractDeclExpr(workflowSrc, 'mergeTarget');
   const expr = extractDeclExpr(workflowSrc, name);
-  const decls = name === 'mergeTarget' ? `export const mergeTarget = ${helper};`
-    : `const mergeTarget = ${helper};\nexport const ${name} = ${expr};`;
+  const decls = `export const ${name} = ${expr};`;
   const url = 'data:text/javascript,' + encodeURIComponent(decls);
   return (await import(url))[name];
 }
@@ -121,17 +117,14 @@ for (const fn of ['classifyPostMergeCI', 'postMergeCIStalls', 'mergeVerdict']) {
   });
 }
 
-// Prompt builders: compare rendered output (not source text) across several
-// manifests so a drift in either the default-case or the targetBranch wiring is
-// caught. Render the canonical prompts.mjs export and the workflow.js inline
-// mirror for each case and assert byte-equality.
+// Prompt builders: compare rendered output (not source text) across a couple of
+// manifests (varying defaultBranch) so any drift between the canonical
+// prompts.mjs export and the workflow.js inline mirror is caught.
 import * as canonicalPrompts from '../prompts.mjs';
 
 const promptManifests = [
   { repo: 'o/r', defaultBranch: 'main', umbrella: 99 },
-  { repo: 'o/r', defaultBranch: 'main', umbrella: 99, targetBranch: 'main' },
-  { repo: 'o/r', defaultBranch: 'main', umbrella: 99, targetBranch: 'integration/foo' },
-  { repo: 'o/r', defaultBranch: 'trunk', umbrella: 99, targetBranch: 'release/1.x' },
+  { repo: 'o/r', defaultBranch: 'trunk', umbrella: 99 },
 ];
 const node = { issue: 7, plan_markdown: 'PLAN' };
 const built = { pr_number: 12, pr_url: 'http://pr/12', branch: 'feat/x', issue: 7 };
@@ -144,7 +137,7 @@ test('workflow.js planPrompt mirror matches prompts.mjs', async () => {
     assert.equal(
       mirror(m, planIssue, briefText),
       canonicalPrompts.planPrompt(m, planIssue, briefText),
-      `planPrompt drifted (target=${m.targetBranch})`,
+      `planPrompt drifted`,
     );
   }
 });
@@ -152,14 +145,14 @@ test('workflow.js planPrompt mirror matches prompts.mjs', async () => {
 test('workflow.js workPrompt mirror matches prompts.mjs', async () => {
   const mirror = await workflowBuilder('workPrompt');
   for (const m of promptManifests) {
-    assert.equal(mirror(m, node), canonicalPrompts.workPrompt(m, node), `workPrompt drifted (target=${m.targetBranch})`);
+    assert.equal(mirror(m, node), canonicalPrompts.workPrompt(m, node), `workPrompt drifted`);
   }
 });
 
 test('workflow.js mergePrompt mirror matches prompts.mjs', async () => {
   const mirror = await workflowBuilder('mergePrompt');
   for (const m of promptManifests) {
-    assert.equal(mirror(m, built), canonicalPrompts.mergePrompt(m, built), `mergePrompt drifted (target=${m.targetBranch})`);
+    assert.equal(mirror(m, built), canonicalPrompts.mergePrompt(m, built), `mergePrompt drifted`);
   }
 });
 
@@ -170,7 +163,7 @@ test('workflow.js triagePrompt mirror matches prompts.mjs', async () => {
       assert.equal(
         mirror(m, 7, 'http://res/1', hint),
         canonicalPrompts.triagePrompt(m, 7, 'http://res/1', hint),
-        `triagePrompt drifted (target=${m.targetBranch}, hint=${hint})`,
+        `triagePrompt drifted`,
       );
     }
   }
@@ -212,23 +205,21 @@ test('workflow.js parkResidualPrompt mirror matches prompts.mjs', async () => {
     assert.equal(
       mirror(m, parkTr, 'http://res/1010'),
       canonicalPrompts.parkResidualPrompt(m, parkTr, 'http://res/1010'),
-      `parkResidualPrompt drifted (target=${m.targetBranch})`,
+      `parkResidualPrompt drifted`,
     );
   }
 });
 
-// autofixPrompt is an arrow const closing over `mergeTarget` (a const) plus
-// `highConfidenceFixes` and `closeDisposition` (the inlined triage `function`
-// blocks). Compile it out of the workflow.js text with all three deps so the
-// rendered output can be compared to the canonical prompts.mjs export.
+// autofixPrompt is an arrow const closing over `highConfidenceFixes` and
+// `closeDisposition` (the inlined triage `function` blocks). Compile it out of
+// the workflow.js text with both deps so the rendered output can be compared to
+// the canonical prompts.mjs export.
 async function workflowAutofixBuilder() {
-  const mergeTargetDecl = extractDeclExpr(workflowSrc, 'mergeTarget');
   // extractFunction returns just the `{ ... }` body, so re-attach the signature
   // to rebuild a usable `function NAME(args) { ... }` declaration.
   const fnDecl = (name) => `function ${name}(result) ${extractFunction(workflowSrc, name)}`;
   const expr = extractDeclExpr(workflowSrc, 'autofixPrompt');
-  const decls = `const mergeTarget = ${mergeTargetDecl};\n`
-    + `${fnDecl('highConfidenceFixes')}\n`
+  const decls = `${fnDecl('highConfidenceFixes')}\n`
     + `${fnDecl('closeDisposition')}\n`
     + `export const autofixPrompt = ${expr};`;
   const url = 'data:text/javascript,' + encodeURIComponent(decls);
@@ -261,31 +252,17 @@ test('workflow.js autofixPrompt mirror matches prompts.mjs', async () => {
       assert.equal(
         mirror(m, tr),
         canonicalPrompts.autofixPrompt(m, tr),
-        `autofixPrompt drifted (target=${m.targetBranch}, residual=${tr.residual_issue})`,
+        `autofixPrompt drifted (residual=${tr.residual_issue})`,
       );
     }
   }
 });
 
-// Cross-render invariant: plan/work/autofix fork off the merge TARGET, not the
-// default branch. When target !== default the fork-base line names the target;
-// when target === default every rendered string collapses to the single-branch
-// output (byte-identical to the absent-target case). This is the core fix for #56.
-test('plan/work/autofix reference the merge target as fork base (and stay byte-identical when target === default)', () => {
+// Cross-render invariant: plan/work/autofix fork off defaultBranch.
+test('plan/work/autofix reference defaultBranch as the fork base', () => {
   const def = { repo: 'o/r', defaultBranch: 'main', umbrella: 99 };
-  const same = { ...def, targetBranch: 'main' };
-  const integ = { ...def, targetBranch: 'integration/foo' };
 
-  // target !== default: each builder names the target as the branch to fork off.
-  assert.match(canonicalPrompts.planPrompt(integ, planIssue, briefText), /git fetch origin integration\/foo -q/);
-  assert.match(canonicalPrompts.workPrompt(integ, node), /Create a branch off fresh `integration\/foo`/);
-  assert.match(canonicalPrompts.autofixPrompt(integ, autofixTr), /Branch off fresh `integration\/foo`/);
-  // and NOT the default branch as a fork base.
-  assert.doesNotMatch(canonicalPrompts.workPrompt(integ, node), /Create a branch off fresh `main`/);
-  assert.doesNotMatch(canonicalPrompts.autofixPrompt(integ, autofixTr), /Branch off fresh `main`/);
-
-  // target === default: byte-identical to the absent-target rendering.
-  assert.equal(canonicalPrompts.planPrompt(same, planIssue, briefText), canonicalPrompts.planPrompt(def, planIssue, briefText));
-  assert.equal(canonicalPrompts.workPrompt(same, node), canonicalPrompts.workPrompt(def, node));
-  assert.equal(canonicalPrompts.autofixPrompt(same, autofixTr), canonicalPrompts.autofixPrompt(def, autofixTr));
+  assert.match(canonicalPrompts.planPrompt(def, planIssue, briefText), /git fetch origin main -q/);
+  assert.match(canonicalPrompts.workPrompt(def, node), /Create a branch off fresh `main`/);
+  assert.match(canonicalPrompts.autofixPrompt(def, autofixTr), /Branch off fresh `main`/);
 });
