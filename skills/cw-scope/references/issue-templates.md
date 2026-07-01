@@ -156,6 +156,7 @@ GitHub issue numbers don't exist until creation, so create then backfill cross-r
    UMB=$(gh issue create --title "<umbrella title>" --body-file "$D/umbrella.md" [--label <label>] | grep -oE '[0-9]+$')
    UMB_ID=$(gh issue view "$UMB" --json id -q .id)
    ```
+   `[--label <label>]` is optional and applies **only** if the repo has a label dedicated specifically to umbrellas. Do **not** apply a milestone/roadmap-tier label (e.g. a `milestone` label) — per the three-tier model above a milestone is a human-owned tier *above* the umbrella that these skills read and reconcile but never create. If no umbrella-specific label exists, leave the umbrella unlabeled; its native sub-issues identify it structurally.
 
 3. **Create each sub-issue.** Replace `#__UMBRELLA__` in the sub-issue files with `$UMB` before creating, then capture each number:
    ```bash
