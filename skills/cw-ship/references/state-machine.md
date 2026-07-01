@@ -17,7 +17,7 @@
 Colors (created idempotently by whichever skill runs first):
 `cw-feedback` 0E8A16 · `cw-feedback:new` FBCA04 · `cw-feedback:hold` C5DEF5 · `cw-feedback:triaging` 1D76DB · `cw-feedback:needs-input` D93F0B · `cw-feedback:go` 0E8A16 · `cw-umbrella:ready` 5319E7.
 
-`cw-umbrella:ready` is the single authoritative "ready for orchestration" marker for an umbrella. It is **NOT a mirror or projection of the native sub-issue graph** (no-duplicated-state) — the sub-issues remain the single source of truth for what work exists; the label only asserts "this umbrella's scope was human-approved and it is cleared to orchestrate."
+`cw-umbrella:ready` is the single authoritative "ready for orchestration" marker for an umbrella. It is **NOT a mirror or projection of the native sub-issue graph** (no-duplicated-state) — the sub-issues remain the single source of truth for what work exists; the label only asserts "this umbrella's scope was human-approved and it is cleared to orchestrate." It is a **cross-cutting** label — produced by cw-ship or cw-scope and consumed read-only by cw-orchestrate — and is **NOT part of the cw-feedback state machine this document describes**; it is documented here only because cw-ship is one of its producers.
 
 **Lifecycle owners:**
 
