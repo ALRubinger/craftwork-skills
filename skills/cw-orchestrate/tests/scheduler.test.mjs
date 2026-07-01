@@ -4,7 +4,13 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeWaves, eligible, transitiveDependents } from '../scheduler.mjs';
+import {
+  computeWaves,
+  eligible,
+  transitiveDependents,
+  pickReadyUmbrellas,
+  readyLabelTerminalAction,
+} from '../scheduler.mjs';
 
 // AE2: two issues sharing an ownership path land in different waves even with
 // no declared logical dependency.
@@ -175,4 +181,122 @@ test('eligible: with paths stripped, only declared deps gate (the plan gate)', (
   ];
   // No file-overlap edge ⇒ both plan-eligible together (no barrier between them).
   assert.deepEqual(eligible(nodes, []), [10, 20]);
+});
+
+// ---------------------------------------------------------------------------
+// pickReadyUmbrellas(issues, label): the repo-scan pickup enumerator. Returns
+// ascending numbers of OPEN issues carrying the pickup label. Main-session-only
+// (runs via gh), so not mirrored in workflow.js.
+// ---------------------------------------------------------------------------
+
+// Acceptance: a mixed repo-scan fixture yields only the OPEN labeled numbers,
+// ascending. A closed-but-still-labeled umbrella is excluded (its terminal
+// transition would strip the label; a closed umbrella is never re-picked).
+test('pickReadyUmbrellas: returns only OPEN labeled umbrellas, ascending', () => {
+  const issues = [
+    { number: 30, state: 'OPEN', labels: [{ name: 'cw-umbrella:ready' }] },
+    { number: 10, state: 'OPEN', labels: [{ name: 'cw-umbrella:ready' }, { name: 'x' }] },
+    { number: 20, state: 'OPEN', labels: [{ name: 'other' }] }, // open, unlabeled
+    { number: 40, state: 'CLOSED', labels: [{ name: 'cw-umbrella:ready' }] }, // closed+labeled
+  ];
+  assert.deepEqual(pickReadyUmbrellas(issues), [10, 30]);
+});
+
+// Label shapes: [{name}] objects and bare [string] names both resolve; lowercase
+// `state` (REST form) is tolerated alongside the uppercase gh --json form.
+test('pickReadyUmbrellas: tolerates string-label and lowercase-state shapes', () => {
+  const issues = [
+    { number: 5, state: 'open', labels: ['cw-umbrella:ready'] },
+    { number: 6, state: 'open', labels: ['nope'] },
+    { number: 7, state: 'closed', labels: ['cw-umbrella:ready'] },
+  ];
+  assert.deepEqual(pickReadyUmbrellas(issues), [5]);
+});
+
+// Edge cases: empty input and label-absent-everywhere both yield [].
+test('pickReadyUmbrellas: empty input and label-absent yield []', () => {
+  assert.deepEqual(pickReadyUmbrellas([]), []);
+  assert.deepEqual(pickReadyUmbrellas(undefined), []);
+  assert.deepEqual(
+    pickReadyUmbrellas([{ number: 1, state: 'OPEN', labels: [{ name: 'a' }] }]),
+    [],
+  );
+});
+
+// A custom label name is honored (default is cw-umbrella:ready).
+test('pickReadyUmbrellas: respects a custom label argument', () => {
+  const issues = [
+    { number: 1, state: 'OPEN', labels: ['ship:ready'] },
+    { number: 2, state: 'OPEN', labels: ['cw-umbrella:ready'] },
+  ];
+  assert.deepEqual(pickReadyUmbrellas(issues, 'ship:ready'), [1]);
+});
+
+// ---------------------------------------------------------------------------
+// readyLabelTerminalAction(umbrella): the terminal-transition decision. 'remove'
+// when the umbrella is fully resolved (closed, or every sub-issue closed); 'keep'
+// while it still tracks work. Drives in-band label removal in Step 7.
+// ---------------------------------------------------------------------------
+
+// A fully-resolved umbrella (all sub-issues closed) → 'remove'.
+test('readyLabelTerminalAction: all sub-issues closed → remove', () => {
+  const umbrella = {
+    state: 'OPEN',
+    subIssues: [{ state: 'CLOSED' }, { state: 'CLOSED' }],
+  };
+  assert.equal(readyLabelTerminalAction(umbrella), 'remove');
+});
+
+// A partially-resolved umbrella (one open sub-issue) → 'keep' (a later scan may
+// retry; the label persists through an in-flight/crashed run).
+test('readyLabelTerminalAction: a still-open sub-issue → keep', () => {
+  const umbrella = {
+    state: 'OPEN',
+    subIssues: [{ state: 'CLOSED' }, { state: 'OPEN' }],
+  };
+  assert.equal(readyLabelTerminalAction(umbrella), 'keep');
+});
+
+// A closed umbrella → 'remove' regardless of sub-issue state (it is done).
+test('readyLabelTerminalAction: a closed umbrella → remove', () => {
+  assert.equal(
+    readyLabelTerminalAction({ state: 'CLOSED', subIssues: [{ state: 'OPEN' }] }),
+    'remove',
+  );
+});
+
+// An umbrella with no sub-issues yet → 'keep' (nothing has resolved).
+test('readyLabelTerminalAction: no sub-issues → keep; null → keep', () => {
+  assert.equal(readyLabelTerminalAction({ state: 'OPEN', subIssues: [] }), 'keep');
+  assert.equal(readyLabelTerminalAction({ state: 'OPEN' }), 'keep');
+  assert.equal(readyLabelTerminalAction(null), 'keep');
+});
+
+// Compose the two: after a fully-resolved umbrella's terminal action fires
+// ('remove') and the label is stripped from the fixture, a re-scan does NOT
+// re-pick it — proving idempotent, no-double-run terminal behavior.
+test('terminal removal makes a re-scan skip the resolved umbrella', () => {
+  const label = 'cw-umbrella:ready';
+  const resolved = {
+    number: 50,
+    state: 'OPEN',
+    labels: [{ name: label }],
+    subIssues: [{ state: 'CLOSED' }],
+  };
+  const stillWorking = {
+    number: 51,
+    state: 'OPEN',
+    labels: [{ name: label }],
+    subIssues: [{ state: 'OPEN' }],
+  };
+  const repo = [resolved, stillWorking];
+  // First scan picks both.
+  assert.deepEqual(pickReadyUmbrellas(repo), [50, 51]);
+  // #50 is fully resolved → remove its label; #51 keeps tracking → keep.
+  assert.equal(readyLabelTerminalAction(resolved), 'remove');
+  assert.equal(readyLabelTerminalAction(stillWorking), 'keep');
+  // Simulate the terminal removal on the live fixture.
+  resolved.labels = resolved.labels.filter((l) => l.name !== label);
+  // Re-scan: #50 is no longer re-picked; #51 remains until it too resolves.
+  assert.deepEqual(pickReadyUmbrellas(repo), [51]);
 });

@@ -192,3 +192,85 @@ export function transitiveDependents(nodes, halted) {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Label-scan pickup + terminal transition (main-session-only).
+//
+// These two functions power cw-orchestrate's repo-scan entry path
+// (`/cw-orchestrate <owner>/<repo>`): enumerate every OPEN umbrella carrying
+// `cw-umbrella:ready` and, once an umbrella is fully resolved, remove that label
+// so a later scan never re-picks it. They run in the MAIN SESSION via `gh` — NOT
+// in the background Workflow — so they are deliberately NOT inlined into
+// `workflow.js` and NOT listed in `tests/mirror.test.mjs`. Kept here to share the
+// scheduler's purity contract (no Date.now()/Math.random()) and unit-test bar.
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalize an issue's `state` to the uppercase GitHub form. Tolerant of the
+ * `gh --json state` value (`'OPEN'`/`'CLOSED'`) and the lowercase REST form
+ * (`'open'`/`'closed'`).
+ * @param {string|undefined} state
+ * @returns {string}
+ */
+function normState(state) {
+  return String(state || '').toUpperCase();
+}
+
+/**
+ * True iff `issue` carries `label` in its `labels` array. Tolerant of the two
+ * shapes callers pass through from `gh`: `labels: [{name}]` (the `--json labels`
+ * object form) or `labels: [string]` (a pre-flattened list of names).
+ * @param {{labels?: (string|{name?:string})[]}} issue
+ * @param {string} label
+ * @returns {boolean}
+ */
+function hasLabel(issue, label) {
+  const labels = issue.labels || [];
+  return labels.some((l) => (typeof l === 'string' ? l : l && l.name) === label);
+}
+
+/**
+ * Enumerate the umbrellas a repo-scan should pick up: issues that are OPEN and
+ * carry the pickup `label`. Closed issues are excluded even if still labeled — a
+ * closed umbrella is done, and its terminal transition strips the label anyway.
+ *
+ * Pure and deterministic: returns ascending issue numbers, no I/O.
+ *
+ * @param {{number:number, state?:string, labels?:(string|{name?:string})[]}[]} issues
+ * @param {string} [label='cw-umbrella:ready'] pickup marker
+ * @returns {number[]} ascending numbers of OPEN issues carrying `label`
+ */
+export function pickReadyUmbrellas(issues, label = 'cw-umbrella:ready') {
+  return (issues || [])
+    .filter((i) => normState(i.state) === 'OPEN' && hasLabel(i, label))
+    .map((i) => i.number)
+    .sort((a, b) => a - b);
+}
+
+/**
+ * Decide the terminal action for an umbrella's `cw-umbrella:ready` label, driven
+ * by LIVE umbrella/sub-issue state — no mirror label. Returns:
+ *
+ *   - `'remove'` — the umbrella is fully resolved: it is CLOSED, or every one of
+ *     its sub-issues is CLOSED (every in-scope unit of work landed). This mirrors
+ *     Step 7's umbrella-close condition, so in-band label removal and umbrella
+ *     closure agree; removing the label makes a future scan skip a done umbrella.
+ *   - `'keep'` — the umbrella is still tracking work (open, with at least one open
+ *     sub-issue, or no sub-issues yet). A crashed/partial run leaves this state,
+ *     so the label persists and the next scan re-picks and re-attempts;
+ *     orchestrate's per-node idempotency makes the re-run safe.
+ *
+ * Idempotent at the call site: removing an absent label is a no-op
+ * (`--remove-label … 2>/dev/null || true`).
+ *
+ * @param {{state?:string, subIssues?:{state?:string}[]}} umbrella
+ * @returns {'remove'|'keep'}
+ */
+export function readyLabelTerminalAction(umbrella) {
+  if (!umbrella) return 'keep';
+  if (normState(umbrella.state) === 'CLOSED') return 'remove';
+  const subs = umbrella.subIssues || [];
+  if (subs.length === 0) return 'keep';
+  const allClosed = subs.every((s) => normState(s.state) === 'CLOSED');
+  return allClosed ? 'remove' : 'keep';
+}
