@@ -136,3 +136,12 @@ The `brainstorm` frontmatter path is repo-relative; the brief itself lives at th
 ## Why the brief, not the issue body
 
 A fresh plan subagent has no memory of the sweep. The decisions the operator made, the gaps they accepted, the constraints they named — none of that is in the issue body. The brief is the durable carrier of that judgment across the context boundary. A planner given only the issue would re-derive (and re-invent) everything the sweep already settled.
+
+## Repo-scan mode: headless-derived briefs
+
+In cw-orchestrate's **repo-scan mode** (`/cw-orchestrate <owner>/<repo>`, the scheduled/opt-in path) there is no interactive sweep — the `cw-umbrella:ready` label already encodes the upstream human approval that the sweep would otherwise supply (see [readiness-sweep.md](./readiness-sweep.md#two-gate-postures)). The manifest is assembled headlessly, and the contract above is preserved exactly:
+
+- Every brief carries `route: ready`. There are no `clarify-now`/`back-off` briefs in a repo-scan manifest — a sub-issue that *would* need clarification is **parked** (`cw-status:stalled` + a needs-input comment) and **excluded from `issues[]`**, never manifested. So `workflow.js` receives precisely what it does in number mode: only ready briefs.
+- A `route: ready` brief is derived **non-interactively from the sub-issue body** (plus a repo scan), substituting for the sweep's operator-supplied decisions. Where number mode captures the operator's resolved decisions, repo mode captures what the issue body already settles — and if the body leaves a genuine fork open, that is exactly the signal to park (not to invent a default), so no ready brief carries a silently-guessed assumption.
+
+All other invariants (absolute `brief_path`, DAG `depends_on`, minted `runId`/`timestamp`) are unchanged.

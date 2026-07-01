@@ -45,6 +45,14 @@ done
 # claude -p "/cw-orchestrate $REPO"
 ```
 
+The optional trailing step wires cw-ship's output straight into cw-orchestrate's **repo-scan mode**. `/cw-orchestrate <owner>/<repo>` (a slug, not a `#number`) discovers **every** OPEN issue carrying `cw-umbrella:ready` — including the ones this very run just filed — and runs each through the hands-off plan → review → work → serial-merge flow **with no interactive sweep** (the label is the upstream human approval; see cw-orchestrate's [readiness-sweep.md](../../cw-orchestrate/references/readiness-sweep.md#two-gate-postures)). It is **opt-in**, same posture as everything else in this file: leave it commented for on-demand-only, uncomment to have the scheduled cw-ship tick also drain ready umbrellas.
+
+Why it is safe to fire on every tick:
+
+- **Idempotent + crash-safe.** cw-orchestrate keeps `cw-umbrella:ready` on an umbrella until it is **fully resolved** (every sub-issue closed) — only then does it strip the label as a terminal reconciliation step. A crashed or partial run leaves the umbrella not-fully-resolved, so the label persists and the next scan re-picks and re-attempts; per-node idempotency (already-merged sub-issues skip) makes the re-run self-healing.
+- **No double-run on an in-flight umbrella.** Because the label persists through an in-flight run, repo-scan mode applies a **live-state in-flight guard**: an umbrella already being orchestrated (an open PR closing one of its sub-issues, or a sub-issue mid-work) is skipped this tick. Overlapping scans stay off each other without a lock.
+- **A sub-issue that needs a decision is parked, not guessed.** Headless, cw-orchestrate cannot ask; a would-be-clarify sub-issue is parked (`cw-status:stalled` + a needs-input comment) and excluded, so the run never plans against an unresolved fork.
+
 Why the retry loop: a headless `-p` run has no turn to "resume" into, so a transient classifier / backoff / rate-limit blip can yield a silent no-op exit 0. Per-issue claims + idempotency make re-invoking safe — a retry that overlaps a still-running attempt can't double-build, because each issue has exactly one claim owner.
 
 **Permissions (Claude Code):** do NOT pass `--permission-mode` and do NOT use `--dangerously-skip-permissions`. `claude -p` reads `~/.claude/settings.json` (`defaultMode: auto` + your allow-list), which should already cover the skill's `gh`/`git`/`gh api` operations. Overriding the mode re-introduces blocking prompts — fatal headless. For other runtimes, ensure the agent can run `gh`/`git` non-interactively without prompting.

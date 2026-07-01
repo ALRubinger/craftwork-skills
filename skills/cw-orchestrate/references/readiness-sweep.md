@@ -6,6 +6,22 @@ The sweep's real job: make each brief **complete enough that headless planning n
 
 Scope is resolved before routing: if the invocation used `--only` / `--except` (SKILL.md Step 1), the sweep runs over the filtered in-scope set only, and out-of-scope `depends_on` edges are pruned with an explicit operator warning (SKILL.md Step 3).
 
+## Two gate postures
+
+cw-orchestrate has two entry paths, and they place the single human approval at **different points** — but neither ever plans against an unresolved fork.
+
+| Entry | Human gate | Sweep? |
+|-------|-----------|--------|
+| **Number mode** (`/cw-orchestrate <umbrella>`) | **At the sweep** — the interactive readiness sweep below is the single human touchpoint. | Yes, full interactive sweep. |
+| **Repo-scan mode** (`/cw-orchestrate <owner>/<repo>`) | **Upstream, at label-stamp time** — the `cw-umbrella:ready` label already encodes a human approval (added at `cw-feedback:go` for cw-ship umbrellas, or at interactive scoping for cw-scope umbrellas). | **No.** It runs headless and cannot solicit a human. |
+
+Repo-scan mode runs **no interactive sweep**: it trusts the upstream approval the label encodes. But it still performs the sweep's *routing judgment* — headlessly (SKILL.md, Repo-scan mode / Step 3b). Per open sub-issue it classifies readiness with the same criteria as the routing table below:
+
+- A sub-issue that would route to **ready** gets a `route: ready` brief derived non-interactively from its issue body and enters the manifest.
+- A sub-issue that would route to **clarify-now** or **back-off-to-brainstorm** — an unresolved design fork a human would have to settle — is **parked** (`cw-status:stalled` + a `needs-input` reason comment) and **excluded from the manifest**. It is never planned; a standalone `/cw-resolve`-style clearing (or a later number-mode sweep) resolves the fork, after which a subsequent scan re-picks the umbrella.
+
+So the invariant "no brief proceeds carrying an unstated assumption / unresolved fork" holds on **both** paths: number mode closes the gap interactively with the operator present; repo mode parks the gap and excludes the sub-issue rather than guessing. The headless Workflow only ever receives `route: ready` briefs.
+
 ## Routing each sub-issue (R2, R3)
 
 For each open sub-issue, in enumeration order:

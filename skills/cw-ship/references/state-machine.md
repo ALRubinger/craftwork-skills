@@ -17,7 +17,13 @@
 Colors (created idempotently by whichever skill runs first):
 `cw-feedback` 0E8A16 · `cw-feedback:new` FBCA04 · `cw-feedback:hold` C5DEF5 · `cw-feedback:triaging` 1D76DB · `cw-feedback:needs-input` D93F0B · `cw-feedback:go` 0E8A16 · `cw-umbrella:ready` 5319E7.
 
-`cw-umbrella:ready` is the single authoritative "ready for orchestration" marker for an umbrella. It is **NOT a mirror or projection of the native sub-issue graph** (no-duplicated-state) — the sub-issues remain the single source of truth for what work exists; the label only asserts "this umbrella's scope was human-approved and it is cleared to orchestrate." Whichever producer files the umbrella (cw-ship from a `cw-feedback:go` issue, or cw-scope from its interactive brainstorm + decision-preflight) creates it lazily/idempotently (`gh label create cw-umbrella:ready ... 2>/dev/null || true`) and stamps it. cw-orchestrate consumes it **read-only** during its readiness sweep — it never writes, mirrors, or reconciles it.
+`cw-umbrella:ready` is the single authoritative "ready for orchestration" marker for an umbrella. It is **NOT a mirror or projection of the native sub-issue graph** (no-duplicated-state) — the sub-issues remain the single source of truth for what work exists; the label only asserts "this umbrella's scope was human-approved and it is cleared to orchestrate."
+
+**Lifecycle owners:**
+
+- **Stamped by** whichever producer files the umbrella — cw-ship (from a `cw-feedback:go` issue) or cw-scope (from its interactive brainstorm + decision-preflight) — created lazily/idempotently (`gh label create cw-umbrella:ready ... 2>/dev/null || true`) and added to the umbrella.
+- **Consumed read-only by cw-orchestrate** during pickup and its readiness sweep: it is the "ready for orchestration" marker and, in cw-orchestrate's repo-scan mode (`/cw-orchestrate <owner>/<repo>`), the enumeration key for discovering ready umbrellas. cw-orchestrate never mirrors or re-stamps it.
+- **Terminally removed by cw-orchestrate** once the umbrella is **fully resolved** (every sub-issue closed) or the umbrella itself is closed — a terminal reconciliation step (cw-orchestrate SKILL.md Step 7), removed idempotently (`--remove-label ... 2>/dev/null || true`). Removal reads the umbrella's **live state**, not a second label, so the no-duplicated-state framing holds: the label is a lifecycle marker retired when the work it gated is done, never a mirror of the sub-issue graph. A crashed/partial orchestrate run leaves the umbrella not-fully-resolved, so the label persists and a later scan re-picks it — the removal is the only write orchestrate makes to this label.
 
 ## States and transitions
 
