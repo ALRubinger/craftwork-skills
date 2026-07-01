@@ -12,9 +12,12 @@
 | `cw-feedback:triaging` | A run holds this issue (paired with a `<!-- cw-ship/claim -->` comment that records the owner). Not a lock — it marks the issue as claimed; ownership and crash-recovery are resolved by the claim, see the claim contract below. | the loop, while in flight |
 | `cw-feedback:needs-input` | Parked: open questions are written into the body; waiting on the operator. | the loop |
 | `cw-feedback:go` | The operator answered the open questions and cleared this to proceed fully autonomously. | **the operator** |
+| `cw-umbrella:ready` | Umbrella cleared and waiting for orchestration; scope already human-approved upstream. The umbrella's own state label — distinct from any human-owned milestone/roadmap tier ABOVE it. | cw-ship or cw-scope (whichever files the umbrella) |
 
 Colors (created idempotently by whichever skill runs first):
-`cw-feedback` 0E8A16 · `cw-feedback:new` FBCA04 · `cw-feedback:hold` C5DEF5 · `cw-feedback:triaging` 1D76DB · `cw-feedback:needs-input` D93F0B · `cw-feedback:go` 0E8A16.
+`cw-feedback` 0E8A16 · `cw-feedback:new` FBCA04 · `cw-feedback:hold` C5DEF5 · `cw-feedback:triaging` 1D76DB · `cw-feedback:needs-input` D93F0B · `cw-feedback:go` 0E8A16 · `cw-umbrella:ready` 5319E7.
+
+`cw-umbrella:ready` is the single authoritative "ready for orchestration" marker for an umbrella. It is **NOT a mirror or projection of the native sub-issue graph** (no-duplicated-state) — the sub-issues remain the single source of truth for what work exists; the label only asserts "this umbrella's scope was human-approved and it is cleared to orchestrate." Whichever producer files the umbrella (cw-ship from a `cw-feedback:go` issue, or cw-scope from its interactive brainstorm + decision-preflight) creates it lazily/idempotently (`gh label create cw-umbrella:ready ... 2>/dev/null || true`) and stamps it. cw-orchestrate consumes it **read-only** during its readiness sweep — it never writes, mirrors, or reconciles it.
 
 ## States and transitions
 
