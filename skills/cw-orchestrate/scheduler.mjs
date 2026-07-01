@@ -251,10 +251,15 @@ export function pickReadyUmbrellas(issues, label = 'cw-umbrella:ready') {
  * Decide the terminal action for an umbrella's `cw-umbrella:ready` label, driven
  * by LIVE umbrella/sub-issue state — no mirror label. Returns:
  *
- *   - `'remove'` — the umbrella is fully resolved: it is CLOSED, or every one of
- *     its sub-issues is CLOSED (every in-scope unit of work landed). This mirrors
- *     Step 7's umbrella-close condition, so in-band label removal and umbrella
- *     closure agree; removing the label makes a future scan skip a done umbrella.
+ *   - `'remove'` — the umbrella is CLOSED, or every one of its sub-issues is
+ *     CLOSED (every in-scope unit of work landed). This computes only the
+ *     sub-issue-graph portion of Step 7's terminal-removal decision: strip the
+ *     label once all in-scope work has landed, even when the umbrella is
+ *     deliberately left open for a live escalation residual (Step 7 removal
+ *     case 2). So label removal does NOT always coincide with umbrella closure —
+ *     in the open-escalation case the label is removed while the umbrella stays
+ *     open. Either way, removing the label makes a future scan skip a done
+ *     umbrella.
  *   - `'keep'` — the umbrella is still tracking work (open, with at least one open
  *     sub-issue, or no sub-issues yet). A crashed/partial run leaves this state,
  *     so the label persists and the next scan re-picks and re-attempts;
