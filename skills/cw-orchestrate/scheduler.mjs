@@ -196,13 +196,18 @@ export function transitiveDependents(nodes, halted) {
 // ---------------------------------------------------------------------------
 // Label-scan pickup + terminal transition (main-session-only).
 //
-// These two functions power cw-orchestrate's repo-scan entry path
+// These functions power cw-orchestrate's repo-scan entry path
 // (`/cw-orchestrate <owner>/<repo>`): enumerate every OPEN umbrella carrying
-// `cw-umbrella:ready` and, once an umbrella is fully resolved, remove that label
-// so a later scan never re-picks it. They run in the MAIN SESSION via `gh` — NOT
-// in the background Workflow — so they are deliberately NOT inlined into
-// `workflow.js` and NOT listed in `tests/mirror.test.mjs`. Kept here to share the
-// scheduler's purity contract (no Date.now()/Math.random()) and unit-test bar.
+// `cw-umbrella:ready` (`pickReadyUmbrellas`), and at run's end transition that
+// label from the umbrella's live state — remove it once the umbrella is fully
+// resolved, swap it to `cw-umbrella:needs-input` when only parked work remains
+// (`readyLabelTerminalAction`), and swap back once a park clears
+// (`needsInputTerminalAction`) — so a later scan never re-picks a done or
+// blocked umbrella but does re-pick one whose park cleared. They run in the MAIN
+// SESSION via `gh` — NOT in the background Workflow — so they are deliberately
+// NOT inlined into `workflow.js` and NOT listed in `tests/mirror.test.mjs`. Kept
+// here to share the scheduler's purity contract (no Date.now()/Math.random())
+// and unit-test bar.
 // ---------------------------------------------------------------------------
 
 /**
@@ -248,6 +253,30 @@ export function pickReadyUmbrellas(issues, label = 'cw-umbrella:ready') {
 }
 
 /**
+ * The label a headless run stamps on a sub-issue it parks (an unresolved fork it
+ * cannot settle without a human). An umbrella whose only remaining open work is
+ * sub-issues carrying this label has nothing an orchestrate run can advance.
+ * @type {string}
+ */
+export const PARKED_SUBISSUE_LABEL = 'cw-status:stalled';
+
+/**
+ * True iff every OPEN sub-issue of `umbrella` is parked (carries
+ * `PARKED_SUBISSUE_LABEL`) — i.e. the umbrella has open work but none of it is
+ * runnable headless. Requires at least one open sub-issue; an all-closed or
+ * no-sub-issue umbrella is not "all-parked".
+ * @param {{subIssues?:{state?:string, labels?:(string|{name?:string})[]}[]}} umbrella
+ * @returns {boolean}
+ */
+function openWorkAllParked(umbrella) {
+  const openSubs = (umbrella.subIssues || []).filter(
+    (s) => normState(s.state) === 'OPEN',
+  );
+  if (openSubs.length === 0) return false;
+  return openSubs.every((s) => hasLabel(s, PARKED_SUBISSUE_LABEL));
+}
+
+/**
  * Decide the terminal action for an umbrella's `cw-umbrella:ready` label, driven
  * by LIVE umbrella/sub-issue state — no mirror label. Returns:
  *
@@ -260,16 +289,25 @@ export function pickReadyUmbrellas(issues, label = 'cw-umbrella:ready') {
  *     in the open-escalation case the label is removed while the umbrella stays
  *     open. Either way, removing the label makes a future scan skip a done
  *     umbrella.
- *   - `'keep'` — the umbrella is still tracking work (open, with at least one open
- *     sub-issue, or no sub-issues yet). A crashed/partial run leaves this state,
- *     so the label persists and the next scan re-picks and re-attempts;
- *     orchestrate's per-node idempotency makes the re-run safe.
+ *   - `'park'` — the umbrella is OPEN with open sub-issues, but every open
+ *     sub-issue is parked (`PARKED_SUBISSUE_LABEL`): there is nothing an
+ *     orchestrate run can advance headless until a human clears a park. The
+ *     caller swaps `cw-umbrella:ready` → `cw-umbrella:needs-input` so scans stop
+ *     re-picking it every tick (the churn retaining `cw-umbrella:ready` on an
+ *     all-parked umbrella otherwise caused) and the label conveys "blocked on
+ *     human input". The reverse transition (`cw-umbrella:needs-input` →
+ *     `cw-umbrella:ready`) is `needsInputTerminalAction` below.
+ *   - `'keep'` — the umbrella is still tracking runnable work (open, with at
+ *     least one open sub-issue that is NOT parked, or no sub-issues yet). A
+ *     crashed/partial run leaves this state, so the label persists and the next
+ *     scan re-picks and re-attempts; orchestrate's per-node idempotency makes
+ *     the re-run safe.
  *
  * Idempotent at the call site: removing an absent label is a no-op
  * (`--remove-label … 2>/dev/null || true`).
  *
- * @param {{state?:string, subIssues?:{state?:string}[]}} umbrella
- * @returns {'remove'|'keep'}
+ * @param {{state?:string, subIssues?:{state?:string, labels?:(string|{name?:string})[]}[]}} umbrella
+ * @returns {'remove'|'park'|'keep'}
  */
 export function readyLabelTerminalAction(umbrella) {
   if (!umbrella) return 'keep';
@@ -277,5 +315,39 @@ export function readyLabelTerminalAction(umbrella) {
   const subs = umbrella.subIssues || [];
   if (subs.length === 0) return 'keep';
   const allClosed = subs.every((s) => normState(s.state) === 'CLOSED');
-  return allClosed ? 'remove' : 'keep';
+  if (allClosed) return 'remove';
+  if (openWorkAllParked(umbrella)) return 'park';
+  return 'keep';
+}
+
+/**
+ * Decide the terminal action for an umbrella currently carrying
+ * `cw-umbrella:needs-input` (the parked-umbrella state `readyLabelTerminalAction`
+ * routes to). Also driven by LIVE state, no mirror label. Returns:
+ *
+ *   - `'remove'` — the umbrella is CLOSED, or every sub-issue is CLOSED: the
+ *     parked work resolved into a fully-done umbrella. Strip
+ *     `cw-umbrella:needs-input`; nothing left to orchestrate.
+ *   - `'restore'` — a park cleared: the umbrella is OPEN and now has at least one
+ *     OPEN, non-parked sub-issue (runnable work). Swap
+ *     `cw-umbrella:needs-input` → `cw-umbrella:ready` so the next scan re-picks
+ *     it. This is the reverse of the `'park'` transition; it fires on the
+ *     following scan tick once the blocking sub-issue's park clears — its
+ *     `PARKED_SUBISSUE_LABEL` removed, however that release happens (a hand-edit,
+ *     or a `/cw-resolve` extended to drain stalled sub-issue parks).
+ *   - `'hold'` — still blocked: OPEN with open sub-issues that are all parked.
+ *     Leave `cw-umbrella:needs-input`; scans keep skipping it (no churn).
+ *
+ * @param {{state?:string, subIssues?:{state?:string, labels?:(string|{name?:string})[]}[]}} umbrella
+ * @returns {'remove'|'restore'|'hold'}
+ */
+export function needsInputTerminalAction(umbrella) {
+  if (!umbrella) return 'hold';
+  if (normState(umbrella.state) === 'CLOSED') return 'remove';
+  const subs = umbrella.subIssues || [];
+  const openSubs = subs.filter((s) => normState(s.state) === 'OPEN');
+  if (subs.length > 0 && openSubs.length === 0) return 'remove';
+  if (openWorkAllParked(umbrella)) return 'hold';
+  // Open, with runnable (non-parked) work — a park cleared.
+  return 'restore';
 }

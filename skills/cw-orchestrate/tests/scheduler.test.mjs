@@ -10,6 +10,8 @@ import {
   transitiveDependents,
   pickReadyUmbrellas,
   readyLabelTerminalAction,
+  needsInputTerminalAction,
+  PARKED_SUBISSUE_LABEL,
 } from '../scheduler.mjs';
 
 // AE2: two issues sharing an ownership path land in different waves even with
@@ -299,4 +301,88 @@ test('terminal removal makes a re-scan skip the resolved umbrella', () => {
   resolved.labels = resolved.labels.filter((l) => l.name !== label);
   // Re-scan: #50 is no longer re-picked; #51 remains until it too resolves.
   assert.deepEqual(pickReadyUmbrellas(repo), [51]);
+});
+
+// ---------------------------------------------------------------------------
+// Parked-umbrella state: readyLabelTerminalAction 'park' + needsInputTerminalAction.
+// When an OPEN umbrella's only remaining open work is parked sub-issues
+// (PARKED_SUBISSUE_LABEL), the ready label is swapped to cw-umbrella:needs-input
+// so scans stop churning; the reverse fires once a park clears.
+// ---------------------------------------------------------------------------
+
+// Every open sub-issue parked → 'park' (swap :ready → :needs-input), NOT 'keep'
+// (which would leave the umbrella in the scan set and re-run every tick).
+test('readyLabelTerminalAction: all open sub-issues parked → park', () => {
+  const umbrella = {
+    state: 'OPEN',
+    subIssues: [
+      { state: 'CLOSED' },
+      { state: 'OPEN', labels: [{ name: PARKED_SUBISSUE_LABEL }] },
+    ],
+  };
+  assert.equal(readyLabelTerminalAction(umbrella), 'park');
+});
+
+// A mix of parked and runnable open work → 'keep' (there is still something a
+// run can advance; do not retire :ready).
+test('readyLabelTerminalAction: one runnable open sub-issue among parked → keep', () => {
+  const umbrella = {
+    state: 'OPEN',
+    subIssues: [
+      { state: 'OPEN', labels: [{ name: PARKED_SUBISSUE_LABEL }] },
+      { state: 'OPEN', labels: [] },
+    ],
+  };
+  assert.equal(readyLabelTerminalAction(umbrella), 'keep');
+});
+
+// A parked umbrella is skipped by a :ready scan once swapped to :needs-input,
+// and needsInputTerminalAction 'hold's it while still all-parked.
+test('parked umbrella leaves the :ready scan set and holds under :needs-input', () => {
+  const ready = 'cw-umbrella:ready';
+  const needsInput = 'cw-umbrella:needs-input';
+  const umbrella = {
+    number: 60,
+    state: 'OPEN',
+    labels: [{ name: ready }],
+    subIssues: [{ state: 'OPEN', labels: [{ name: PARKED_SUBISSUE_LABEL }] }],
+  };
+  // Scan picks it; terminal action says park.
+  assert.deepEqual(pickReadyUmbrellas([umbrella]), [60]);
+  assert.equal(readyLabelTerminalAction(umbrella), 'park');
+  // Simulate the swap :ready → :needs-input.
+  umbrella.labels = [{ name: needsInput }];
+  // A :ready scan no longer re-picks it — churn stopped.
+  assert.deepEqual(pickReadyUmbrellas([umbrella]), []);
+  // Still all-parked → hold under the needs-input state.
+  assert.equal(needsInputTerminalAction(umbrella), 'hold');
+});
+
+// The reverse transition: once a park clears (the sub-issue loses
+// PARKED_SUBISSUE_LABEL), needsInputTerminalAction → 'restore' so the caller
+// swaps :needs-input → :ready and the next scan re-picks it.
+test('needsInputTerminalAction: a cleared park → restore', () => {
+  const umbrella = {
+    state: 'OPEN',
+    subIssues: [{ state: 'OPEN', labels: [] }],
+  };
+  assert.equal(needsInputTerminalAction(umbrella), 'restore');
+});
+
+// A needs-input umbrella whose parked work all closed out → 'remove' (fully
+// resolved; strip the needs-input label, nothing to re-pick).
+test('needsInputTerminalAction: all sub-issues closed → remove; closed umbrella → remove', () => {
+  assert.equal(
+    needsInputTerminalAction({ state: 'OPEN', subIssues: [{ state: 'CLOSED' }] }),
+    'remove',
+  );
+  assert.equal(
+    needsInputTerminalAction({ state: 'CLOSED', subIssues: [{ state: 'OPEN' }] }),
+    'remove',
+  );
+});
+
+// Null/edge: no umbrella → 'hold' (safe default; nothing to transition).
+test('needsInputTerminalAction: null → hold', () => {
+  assert.equal(needsInputTerminalAction(null), 'hold');
 });

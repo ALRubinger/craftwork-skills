@@ -88,6 +88,21 @@ Resolve each candidate to `{number, title, state}` and drop anything not `OPEN`.
 
 `/cw-orchestrate <owner>/<repo>` runs **without** the interactive sweep. It trusts the upstream human approval the `cw-umbrella:ready` label already encodes (stamped at `cw-feedback:go` for cw-ship umbrellas, or at interactive scoping for cw-scope umbrellas) and cannot solicit a human headless. This is the scheduled/opt-in entry path; the gate posture is documented in [readiness-sweep.md](./references/readiness-sweep.md#two-gate-postures).
 
+0. **First, reconcile parked umbrellas (the reverse transition).** Before enumerating `cw-umbrella:ready`, reconcile any umbrella parked in the previous state — `cw-umbrella:needs-input` (see [Step 3b](#step-3b-assemble-the-manifest-headlessly-repo-scan-mode-replaces-steps-2-4)). A `:needs-input` umbrella is **not** picked by the `:ready` enumerator, so its restore cannot ride on a per-umbrella Step 7; it must happen here, up front. For each OPEN issue carrying `cw-umbrella:needs-input`, read `{state, subIssues{state,labels}}` and apply `needsInputTerminalAction(umbrella)` from [scheduler.mjs](./scheduler.mjs):
+
+   ```bash
+   gh issue list --repo "$repo" --state open --label cw-umbrella:needs-input \
+     --json number,state --jq 'sort_by(.number)[].number'
+   # per umbrella, from needsInputTerminalAction:
+   #   'restore' → a park cleared, runnable work remains:
+   #       gh issue edit <n> --repo "$repo" --add-label cw-umbrella:ready --remove-label cw-umbrella:needs-input
+   #   'remove'  → fully resolved (closed / all sub-issues closed):
+   #       gh issue edit <n> --repo "$repo" --remove-label cw-umbrella:needs-input 2>/dev/null || true
+   #   'hold'    → still all-parked: leave it (a later tick reconciles once the park clears)
+   ```
+
+   A `'restore'`d umbrella regains `cw-umbrella:ready` and so is picked up by the enumeration in step 1 of **this same** scan tick. This is idempotent and crash-safe: the transition reads live state only, and re-running produces the same labels.
+
 1. **Enumerate ready umbrellas.** List every OPEN issue carrying the label:
 
    ```bash
@@ -116,7 +131,7 @@ For a scan-picked umbrella, there is **no interactive readiness sweep, no `--onl
    **Fallback when no signal is derivable.** If a sub-issue exposes no native blocked-by edge and no parseable `depends_on` / "needs #NNN" body line, treat it (and, if none of the sub-issues expose any signal, the whole set) as **independent — an empty DAG**. That is the documented default. Do **not** distinguish an *absent* dependency section from a *malformed* one, and do **not** park on a missing signal: native blocked-by is the authoritative ordering source, and the serial merge loop's per-PR `git merge-tree` re-check against fresh `main` is the backstop that catches any real ordering conflict at merge time (rebase/retry or stall). **Residual mis-order risk, stated explicitly:** two sub-issues with a genuine *logical* (non-file-overlap) dependency that was never declared as a native blocked-by edge or a body signal will be treated as independent and may plan/merge out of order — a wrong result the merge-tree backstop cannot see because there is no file conflict. This is accepted as the default rather than blocking the headless run on unparseable prose; declare such a dependency as a native blocked-by edge upstream if the ordering matters.
 3. **Assemble the manifest** exactly as Step 4 (same schema, `runId`/`timestamp` minted here in the main session) and **launch `workflow.js` directly** (Step 5) — no "go" gate. Because only `route: ready` briefs enter `issues[]`, `workflow.js` receives exactly what it does today; it never sees a would-be-clarify fork.
 
-If **every** open sub-issue parked (nothing routed ready), there is nothing to orchestrate this run: skip launching `workflow.js`, and let Step 7 reconcile (the umbrella keeps `cw-umbrella:ready` since it is not fully resolved, so a later scan retries once the parks are cleared via `/cw-resolve`).
+If **every** open sub-issue parked (nothing routed ready), there is nothing to orchestrate this run: skip launching `workflow.js`, and let Step 7 reconcile. Because the umbrella is not fully resolved but has **no runnable work** until a human clears a park, Step 7 **swaps `cw-umbrella:ready` → `cw-umbrella:needs-input`** (`readyLabelTerminalAction` → `'park'`) rather than leaving `cw-umbrella:ready` on. This is the fix for the churn the retained-`:ready` behavior otherwise caused: without the swap, every subsequent scan re-picks this umbrella, re-routes, re-parks the same sub-issues, and re-launches against nothing runnable — indefinitely. With the swap, `pickReadyUmbrellas` (which enumerates `cw-umbrella:ready`) skips it until a park clears; once the blocking sub-issue loses `cw-status:stalled` (however released), the next scan's step-0 reconcile (`needsInputTerminalAction` → `'restore'`) swaps it back to `cw-umbrella:ready`.
 
 ### Step 2: Run the interactive readiness sweep
 
@@ -216,18 +231,27 @@ GitHub is the authoritative record of what work is done and still needs doing. T
 4. **Post a run-summary comment on the umbrella**: the merged / stalled / deferred table, residual links, and any production bug the shepherding surfaced.
 5. **Close the umbrella when it is fully done, and strip its pickup label.** After sub-issue state is reconciled, if **every** in-scope sub-issue is resolved (merged or closed) **and** none carries `cw-status:deferred`/`cw-status:stalled` **and** no residual is left `open — escalation` (closed/moot/autofixed residuals are fine), close the umbrella itself: `gh issue close <umbrella> --reason completed --comment "All sub-issues and residuals resolved. <one-line outcome>"`. Otherwise leave it **open** — an umbrella whose sub-issues are all closed should close, but any sub-issue still open (parked or in flight) or a live escalation means it is still tracking work. Never close an umbrella that still carries unresolved items.
 
-   **Terminal removal of `cw-umbrella:ready`.** The pickup label is a lifecycle marker, not a mirror of the sub-issue graph — orchestrate consumed it read-only and now retires it. Remove it as a terminal step in exactly two cases, so a future scan never re-picks a done umbrella:
+   **Terminal transition of the umbrella pickup label.** The pickup label is a lifecycle marker in one of two mutually-exclusive states (`cw-umbrella:ready` ↔ `cw-umbrella:needs-input`), not a mirror of the sub-issue graph — orchestrate consumed `cw-umbrella:ready` read-only and now transitions it from the umbrella's **live state**. `readyLabelTerminalAction(umbrella)` in [scheduler.mjs](./scheduler.mjs) returns:
 
-   - **The umbrella just closed** (the fully-done branch above — every in-scope sub-issue resolved, nothing deferred/stalled, no residual `open — escalation`), or was already closed.
-   - **The umbrella is fully resolved but deliberately left open only for a still-live escalation residual** — every sub-issue is closed but a residual sits `open — escalation`. Sub-issue work is done, so orchestrate has nothing left to re-pick; the escalation is owned by `/cw-resolve` / cw-sweep, not by a re-scan.
+   - **`'remove'`** — strip `cw-umbrella:ready`, so a future scan never re-picks a done umbrella. Two cases:
+     - **The umbrella just closed** (the fully-done branch above — every in-scope sub-issue resolved, nothing deferred/stalled, no residual `open — escalation`), or was already closed.
+     - **The umbrella is fully resolved but deliberately left open only for a still-live escalation residual** — every sub-issue is closed but a residual sits `open — escalation`. Sub-issue work is done, so orchestrate has nothing left to re-pick; the escalation is owned by `/cw-resolve` / cw-sweep, not by a re-scan.
 
-   `readyLabelTerminalAction(umbrella)` in [scheduler.mjs](./scheduler.mjs) computes the sub-issue-graph portion of this decision from the umbrella's **live state**: `'remove'` when the umbrella is CLOSED **or** every sub-issue is CLOSED; `'keep'` while any sub-issue is still open. On `'remove'`, strip it idempotently:
+     ```bash
+     gh issue edit <umbrella> --remove-label cw-umbrella:ready 2>/dev/null || true
+     ```
 
-   ```bash
-   gh issue edit <umbrella> --remove-label cw-umbrella:ready 2>/dev/null || true
-   ```
+   - **`'park'`** — the umbrella is OPEN but every remaining open sub-issue is parked (`cw-status:stalled`): there is nothing a run can advance until a human clears a park. **Swap** `cw-umbrella:ready` → `cw-umbrella:needs-input` (lazily creating the label) so `pickReadyUmbrellas` stops re-picking it every tick — the churn fix. Once the sub-issue's park clears (its `cw-status:stalled` removed, however released), the *next* scan's step-0 reconcile (`needsInputTerminalAction` → `'restore'`) swaps it back.
 
-   Removing an absent label is a no-op, so this is safe to re-run. This applies to **both** entry paths (number and repo-scan) — it is the single reconciliation delta that the "number mode is unchanged" note (Step 1) scopes around, so a reviewer should not read this Step 7 addition as a scope violation: the readiness sweep and go-gate (Steps 2–4) do remain unchanged, and only this terminal label removal reaches into both paths. **Crash-safe:** a crashed or partial run leaves at least one sub-issue open, so `readyLabelTerminalAction` returns `'keep'`, the label persists, and the next repo scan re-picks and re-attempts — orchestrate's per-node idempotency (`eligible()` over the live merged set; already-merged sub-issues skip) makes the re-run self-healing. Never re-stamp the label; removal is the only write orchestrate ever makes to it.
+     ```bash
+     gh label create cw-umbrella:needs-input --color D93F0B \
+       --description "Umbrella cleared to orchestrate but blocked on human input (only parked sub-issues remain)" 2>/dev/null || true
+     gh issue edit <umbrella> --add-label cw-umbrella:needs-input --remove-label cw-umbrella:ready
+     ```
+
+   - **`'keep'`** — the umbrella still tracks **runnable** work (open, with at least one open non-parked sub-issue, or no sub-issues yet). Leave `cw-umbrella:ready` as-is.
+
+   Every transition reads live state only (never a second/mirror label) and is idempotent (removing/adding an absent label is a no-op). This applies to **both** entry paths (number and repo-scan) — it is the single reconciliation delta that the "number mode is unchanged" note (Step 1) scopes around, so a reviewer should not read this Step 7 addition as a scope violation: the readiness sweep and go-gate (Steps 2–4) do remain unchanged, and only this terminal label transition reaches into both paths. **Crash-safe:** a crashed or partial run leaves at least one sub-issue open and `cw-umbrella:ready` intact (`'keep'`, or `'park'` only if all-parked), so the next repo scan re-picks (or, for a `'park'`ed umbrella, its step-0 reconcile restores it once the park clears) and re-attempts — orchestrate's per-node idempotency (`eligible()` over the live merged set; already-merged sub-issues skip) makes the re-run self-healing.
 6. **Update the parent issue the umbrella names** (e.g. a `Parent: #747` line). If the parent has a checklist entry for the umbrella, flip it to `[x]` **only when every in-scope sub-issue is resolved** (nothing deferred or stalled remaining); otherwise leave it unchecked and post a progress comment so the milestone reflects partial completion. Never mark a parent line done while the umbrella still carries open deferred/stalled items.
 7. **Update sub-issue descriptions that diverged from what shipped.** When a node's implementation took a different approach, or narrowed/broadened scope, or split follow-ups into new issues, edit that **sub-issue's body** so its description matches what actually shipped — don't close it still describing a plan that didn't happen (contract rule 4). Only where the description would now mislead; skip nodes that shipped as written.
 8. **Reconcile cross-referenced issues.** Beyond the manifest and the named parent, reconcile any **other** issue the run's PRs or sub-issue bodies `Relates to` / `Part of` / mention (contract rule 5): tick its tracker line, close it if a node fully resolved it, or post a one-line "addressed by PR #<pr>" so the reference isn't left stale. Enumerate them from the merged PRs' bodies and the sub-issue bodies.
