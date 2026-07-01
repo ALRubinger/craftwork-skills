@@ -13,17 +13,41 @@
 | `cw-feedback:needs-input` | Parked: open questions are written into the body; waiting on the operator. | the loop |
 | `cw-feedback:go` | The operator answered the open questions and cleared this to proceed fully autonomously. | **the operator** |
 | `cw-umbrella:ready` | Umbrella cleared and waiting for orchestration; scope already human-approved upstream. The umbrella's own state label — distinct from any human-owned milestone/roadmap tier ABOVE it. | cw-ship or cw-scope (whichever files the umbrella) |
+| `cw-umbrella:needs-input` | Umbrella cleared to orchestrate, but its only remaining open work is **parked** sub-issues (each `cw-status:stalled`) that a headless run cannot advance without a human. Swapped in **place of** `cw-umbrella:ready` (never both) so repo-scan mode stops re-picking it every tick and the label conveys "blocked on human input". | cw-orchestrate (terminal reconciliation) |
 
 Colors (created idempotently by whichever skill runs first):
-`cw-feedback` 0E8A16 · `cw-feedback:new` FBCA04 · `cw-feedback:hold` C5DEF5 · `cw-feedback:triaging` 1D76DB · `cw-feedback:needs-input` D93F0B · `cw-feedback:go` 0E8A16 · `cw-umbrella:ready` 5319E7.
+`cw-feedback` 0E8A16 · `cw-feedback:new` FBCA04 · `cw-feedback:hold` C5DEF5 · `cw-feedback:triaging` 1D76DB · `cw-feedback:needs-input` D93F0B · `cw-feedback:go` 0E8A16 · `cw-umbrella:ready` 5319E7 · `cw-umbrella:needs-input` D93F0B (the shared needs-input color).
 
 `cw-umbrella:ready` is the single authoritative "ready for orchestration" marker for an umbrella. It is **NOT a mirror or projection of the native sub-issue graph** (no-duplicated-state) — the sub-issues remain the single source of truth for what work exists; the label only asserts "this umbrella's scope was human-approved and it is cleared to orchestrate." It is a **cross-cutting** label — produced by cw-ship or cw-scope and consumed read-only by cw-orchestrate — and is **NOT part of the cw-feedback state machine this document describes**; it is documented here only because cw-ship is one of its producers.
+
+`cw-umbrella:ready` and `cw-umbrella:needs-input` are **mutually exclusive lifecycle states** of the same umbrella marker, never a mirror of the sub-issue graph (no-duplicated-state still holds — both are computed from, and retired by, the umbrella's live sub-issue state, not stored as a shadow copy of it):
+
+```
+  producer stamps           orchestrate: only remaining open work is parked
+  (cw-ship / cw-scope)               (readyLabelTerminalAction → 'park')
+        │                                        │
+        ▼                                        ▼
+  cw-umbrella:ready ──────────────────────► cw-umbrella:needs-input
+        ▲                                        │
+        │   a park clears (sub-issue loses       │
+        │   cw-status:stalled; needsInput-       │
+        └── TerminalAction → 'restore') ─────────┘
+        │
+        └── fully resolved (umbrella closed / every sub-issue closed) → label removed
+```
+
+The swap is created lazily/idempotently (`gh label create cw-umbrella:needs-input ... 2>/dev/null || true`) and only ever **replaces** `cw-umbrella:ready` (an umbrella carries at most one of the two). Because both directions are derived from live state by pure functions (`readyLabelTerminalAction` / `needsInputTerminalAction` in cw-orchestrate's `scheduler.mjs`) and the label is retired when the work it gated is done, no persistent duplicate of the sub-issue graph is ever kept.
 
 **Lifecycle owners:**
 
 - **Stamped by** whichever producer files the umbrella — cw-ship (from a `cw-feedback:go` issue) or cw-scope (from its interactive brainstorm + decision-preflight) — created lazily/idempotently (`gh label create cw-umbrella:ready ... 2>/dev/null || true`) and added to the umbrella.
 - **Consumed read-only by cw-orchestrate** during pickup and its readiness sweep: it is the "ready for orchestration" marker and, in cw-orchestrate's repo-scan mode (`/cw-orchestrate <owner>/<repo>`), the enumeration key for discovering ready umbrellas. cw-orchestrate never mirrors or re-stamps it.
-- **Terminally removed by cw-orchestrate** once the umbrella is **fully resolved** (every sub-issue closed) or the umbrella itself is closed — a terminal reconciliation step (cw-orchestrate SKILL.md Step 7), removed idempotently (`--remove-label ... 2>/dev/null || true`). Removal reads the umbrella's **live state**, not a second label, so the no-duplicated-state framing holds: the label is a lifecycle marker retired when the work it gated is done, never a mirror of the sub-issue graph. A crashed/partial orchestrate run leaves the umbrella not-fully-resolved, so the label persists and a later scan re-picks it — the removal is the only write orchestrate makes to this label.
+- **Transitioned or terminally removed by cw-orchestrate**, all as terminal reconciliation steps (cw-orchestrate SKILL.md Step 7), each reading the umbrella's **live state** (never a second/mirror label), removed/added idempotently (`... 2>/dev/null || true`):
+  - **Removed** once the umbrella is **fully resolved** (every sub-issue closed) or the umbrella itself is closed.
+  - **Swapped to `cw-umbrella:needs-input`** when the umbrella is still open but its only remaining open work is parked sub-issues (`readyLabelTerminalAction` → `'park'`), so repo-scan mode stops re-picking it every tick.
+  - **Swapped back to `cw-umbrella:ready`** once a park clears and runnable work remains (`needsInputTerminalAction` → `'restore'`), so the next scan re-picks it. `'restore'` fires on the following tick once the blocking sub-issue's park clears — its `cw-status:stalled` removed, however that release happens (a hand-edit, or a `/cw-resolve` extended to drain stalled sub-issue parks).
+
+  A crashed/partial orchestrate run leaves the umbrella not-fully-resolved with `cw-umbrella:ready` intact, so a later scan re-picks it — orchestrate's per-node idempotency makes the re-run self-healing. The no-duplicated-state framing holds throughout: the label is a lifecycle marker (in one of two mutually-exclusive states) retired when the work it gated is done, never a stored mirror of the sub-issue graph.
 
 ## States and transitions
 
