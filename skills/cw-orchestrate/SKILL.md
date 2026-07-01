@@ -73,6 +73,8 @@ gh issue view "$umbrella" --json subIssues --jq '.subIssues[] | select(.state=="
 
 If `subIssues` is **empty** but the umbrella body still carries a `- [ ] #NNN` checklist, it is a legacy umbrella that predates native sub-issues. Don't parse the checklist — **migrate it** to native sub-issues first (cw-scope's porting recipe in [references/issue-templates.md](../cw-scope/references/issue-templates.md)), so the run and every later reader see one source of truth.
 
+An umbrella produced by cw-ship or cw-scope carries the `cw-umbrella:ready` state label (see [cw-ship's state machine](../cw-ship/references/state-machine.md)) — its scope was human-approved upstream and it is cleared for orchestration. Orchestrate consumes that label **read-only** as the "ready for orchestration" marker; it never writes or mirrors it, and the native sub-issue graph (not the label) remains the single source of truth for what work exists.
+
 Resolve each candidate to `{number, title, state}` and drop anything not `OPEN`. Closed sub-issues are excluded (R1). Then apply the scope filter: if `--only` is set, keep only those numbers (error if any named number is not an open sub-issue of the umbrella); if `--except` is set, drop those. Present the resulting in-scope set to the operator before sweeping, and state explicitly which sub-issues were excluded by scope so the run's blast radius is unambiguous.
 
 ### Step 2: Run the interactive readiness sweep
