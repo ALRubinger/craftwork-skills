@@ -162,13 +162,13 @@ FRESHNESS PRE-CHECK — do this FIRST, before branching or writing any code. The
 
 Steps:
 1. Branch off fresh \`${m.defaultBranch}\` in your worktree.
-2. Implement ONLY the listed fixes. Stay strictly in scope. If a "fix" turns out to be larger, ambiguous, or riskier than its description, SKIP it and record that in \`cause\` rather than expanding scope or guessing — a skipped fix is fine; an over-reaching one is not.
+2. Implement ONLY the listed fixes. Stay strictly in scope. If a "fix" turns out to be larger, ambiguous, or riskier than its description, SKIP it and record it in \`skipped_fixes\` (the fix's title) plus a note in \`cause\` rather than expanding scope or guessing — a skipped fix is fine; an over-reaching one is not. Skipping ANY listed fix means the residual is NOT fully resolved, so step 4 must keep it open.
 3. Follow repo conventions (AGENTS.md/CLAUDE.md): regenerate generated files rather than hand-editing; add or extend tests for changed behavior; keep coverage above the repo bar. Run the build + test suite; tests must pass before you open a PR.
-4. Open a PR. Conventional-commit title (\`fix\`/\`test\`/\`docs\`/\`chore\` scope as fits). Body: Summary + Test plan. ${closeDisposition(tr) === 'close-via-autofix' ? `Include \`Closes #${tr.residual_issue}\` on its own line — these fixes resolve every remaining actionable finding.` : `Include \`Relates to #${tr.residual_issue}\` on its own line. Do NOT close it: unresolved DECISION/low-confidence findings remain for a human.`} Push the branch.
+4. Open a PR. Conventional-commit title (\`fix\`/\`test\`/\`docs\`/\`chore\` scope as fits). Body: Summary + Test plan. ${closeDisposition(tr) === 'close-via-autofix' ? `These fixes are the residual's only remaining actionable findings, so it closes only when they ALL land: if you applied EVERY listed fix (\`skipped_fixes\` is empty), include \`Closes #${tr.residual_issue}\` on its own line; if you SKIPPED any fix (per step 2), include \`Relates to #${tr.residual_issue}\` INSTEAD and do NOT close it — the skipped fix is unfinished work, so the residual must stay open for the next sweep.` : `Include \`Relates to #${tr.residual_issue}\` on its own line. Do NOT close it: unresolved DECISION/low-confidence findings remain for a human.`} Push the branch.
 5. Run a code-review pass on your own diff. A P0 is a correctness/security/data-loss/scope finding that must not merge. Fix and re-review if you can; if a P0 cannot be safely auto-fixed here, leave the PR open and report p0:true.
-6. Report issue=${tr.residual_issue}, the PR number/URL, branch, files changed, and your verdict.
+6. Report issue=${tr.residual_issue}, the PR number/URL, branch, files changed, the titles of any fixes you skipped (\`skipped_fixes\`), and your verdict.
 
 If you cannot reach green build + passing tests + clean review, report ready_to_merge:false with the cause rather than papering over it.
 
-Return structured output: { issue, ready_to_merge, p0, pr_number, pr_url, branch, changed_paths, cause }.`;
+Return structured output: { issue, ready_to_merge, p0, pr_number, pr_url, branch, changed_paths, cause, skipped_fixes }.`;
 };
