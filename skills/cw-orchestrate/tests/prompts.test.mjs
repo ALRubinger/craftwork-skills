@@ -79,6 +79,39 @@ test('autofixPrompt forks + prechecks against defaultBranch', () => {
   assert.ok(p.includes('already landed on main'));
 });
 
+// A tr where a DECISION remains, so closeDisposition !== 'close-via-autofix'.
+const autofixTrKeepOpen = {
+  residual_issue: 2020,
+  sub_issue: 985,
+  findings: [
+    { title: 'A', verdict: 'FIX_NOW', confidence: 'high', fix_hint: 'do A', rationale: 'because A' },
+    { title: 'B', verdict: 'DECISION', decision_question: 'Q?' },
+  ],
+};
+
+test('autofixPrompt (close-via-autofix): the Closes keyword is conditional on applying EVERY fix', () => {
+  const p = autofixPrompt(baseManifest, autofixTr);
+  // Regression for #82: a skipped fix must NOT ship `Closes #` and close the residual.
+  assert.ok(p.includes('if you applied EVERY listed fix (`skipped_fixes` is empty)'));
+  assert.ok(p.includes('if you SKIPPED any fix'));
+  assert.ok(p.includes(`Closes #${autofixTr.residual_issue}`));
+  assert.ok(p.includes(`Relates to #${autofixTr.residual_issue}`));
+  // The old unconditional phrasing is gone.
+  assert.ok(!p.includes('these fixes resolve every remaining actionable finding'));
+});
+
+test('autofixPrompt: skips are recorded in `skipped_fixes` (step 2 + schema)', () => {
+  const p = autofixPrompt(baseManifest, autofixTr);
+  assert.ok(p.includes('record it in `skipped_fixes`'));
+  assert.match(p, /Return structured output:.*, skipped_fixes }\./);
+});
+
+test('autofixPrompt (keep-open disposition) only Relates-to, never Closes', () => {
+  const p = autofixPrompt(baseManifest, autofixTrKeepOpen);
+  assert.ok(p.includes(`Relates to #${autofixTrKeepOpen.residual_issue}`));
+  assert.ok(!p.includes(`Closes #${autofixTrKeepOpen.residual_issue}`));
+});
+
 test('triagePrompt shipped-code references point at defaultBranch', () => {
   const p = triagePrompt(baseManifest, 7, 'http://res/1', null);
   assert.ok(p.includes('default branch main'));

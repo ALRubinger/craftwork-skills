@@ -110,6 +110,10 @@ const BUILD_SCHEMA = {
     branch: { type: ['string', 'null'] },
     changed_paths: { type: 'array', items: { type: 'string' } },
     cause: { type: ['string', 'null'] },
+    // Titles of listed fixes the autofix subagent SKIPPED (too large/ambiguous to
+    // land in scope). Non-empty => not every fix applied, so the residual stays
+    // open even when triage disposition was close-via-autofix.
+    skipped_fixes: { type: 'array', items: { type: 'string' } },
   },
 };
 
@@ -258,7 +262,8 @@ ${
   mode === 'consume'
     ? `\nCONSUME MODE: this residual was parked for a decision and the operator has now ANSWERED (label cw-review-residual:go). Its body has a "## Decision needed" block whose entries each carry an "**Answer:** <decision>" line. Treat each answer as the SETTLED decision and re-classify the finding it answers:
 - answer accepts current behavior / "leave as-is" / "no change" => RESOLVED (or MOOT if the finding no longer applies).
-- answer specifies a change ("do X", "use Y") => FIX_NOW, confidence "high" (the operator authorized this exact change), fix_hint = the operator's specified change.
+- answer specifies a SMALL, bounded change ("do X", "use Y") that an autofix subagent can land safely and in scope as a single PR => FIX_NOW, confidence "high" (the operator authorized this exact change), fix_hint = the operator's specified change.
+- answer authorizes a FEATURE-SIZED or BROAD change (multi-file, a new subsystem/behavior, or otherwise too large or risky to land unreviewed in one autofix PR) => do NOT mark it high-confidence. High-confidence would route it to close-via-autofix, but the autofix subagent will SKIP an over-large fix and the residual would close having dropped the answered decision. Instead keep DECISION so it RE-PARKS (the label flips back to cw-review-residual:needs-input, breaking the go -> skip -> never-close loop) and emit decision_question/recommended_answer/alt_options that route the authorized-but-large change (e.g. scope it into an umbrella via /cw-scope, or escalate), noting the operator has already approved the intent.
 - answer is genuinely ambiguous or raises a NEW fork => keep DECISION (it will re-park) and emit fresh decision_question/recommended_answer/alt_options.
 Findings with NO operator answer are re-judged normally (below). Leave the cw-review-residual:go label in place — closing the residual (now or via the autofix PR) clears it, a re-park flips it to needs-input, and if it stays open for autofix a re-run re-consumes the same answers idempotently. Do not remove it by hand.\n`
     : ''
@@ -327,15 +332,15 @@ FRESHNESS PRE-CHECK — do this FIRST, before branching or writing any code. The
 
 Steps:
 1. Branch off fresh \`${a.defaultBranch}\` in your worktree.
-2. Implement ONLY the listed fixes. Stay strictly in scope. If a "fix" turns out to be larger, ambiguous, or riskier than its description, SKIP it and record that in \`cause\` rather than expanding scope or guessing.
+2. Implement ONLY the listed fixes. Stay strictly in scope. If a "fix" turns out to be larger, ambiguous, or riskier than its description, SKIP it and record it in \`skipped_fixes\` (the fix's title) plus a note in \`cause\` rather than expanding scope or guessing. Skipping ANY listed fix means the residual is NOT fully resolved, so step 4 must keep it open.
 3. Follow repo conventions (AGENTS.md/CLAUDE.md): regenerate generated files rather than hand-editing; add or extend tests for changed behavior; keep coverage above the repo bar. Run the build + test suite; tests must pass before you open a PR.
-4. Open a PR. Conventional-commit title (\`fix\`/\`test\`/\`docs\`/\`chore\` scope as fits). Body: Summary + Test plan. ${closeDisposition(tr) === 'close-via-autofix' ? `Include \`Closes #${tr.residual_issue}\` on its own line — these fixes resolve every remaining actionable finding.` : `Include \`Relates to #${tr.residual_issue}\` on its own line. Do NOT close it: unresolved DECISION/low-confidence findings remain for a human.`} Push the branch.
+4. Open a PR. Conventional-commit title (\`fix\`/\`test\`/\`docs\`/\`chore\` scope as fits). Body: Summary + Test plan. ${closeDisposition(tr) === 'close-via-autofix' ? `These fixes are the residual's only remaining actionable findings, so it closes only when they ALL land: if you applied EVERY listed fix (\`skipped_fixes\` is empty), include \`Closes #${tr.residual_issue}\` on its own line; if you SKIPPED any fix (per step 2), include \`Relates to #${tr.residual_issue}\` INSTEAD and do NOT close it — the skipped fix is unfinished work, so the residual must stay open for the next sweep.` : `Include \`Relates to #${tr.residual_issue}\` on its own line. Do NOT close it: unresolved DECISION/low-confidence findings remain for a human.`} Push the branch.
 5. Run a code-review pass on your own diff. A P0 is a correctness/security/data-loss/scope finding that must not merge. Fix and re-review if you can; if a P0 cannot be safely auto-fixed here, leave the PR open and report p0:true.
-6. Report issue=${tr.residual_issue}, the PR number/URL, branch, files changed, and your verdict.
+6. Report issue=${tr.residual_issue}, the PR number/URL, branch, files changed, the titles of any fixes you skipped (\`skipped_fixes\`), and your verdict.
 
 If you cannot reach green build + passing tests + clean review, report ready_to_merge:false with the cause rather than papering over it.
 
-Return structured output: { issue, ready_to_merge, p0, pr_number, pr_url, branch, changed_paths, cause }.`;
+Return structured output: { issue, ready_to_merge, p0, pr_number, pr_url, branch, changed_paths, cause, skipped_fixes }.`;
 
 const mergePrompt = (a, built) => `You are performing a SERIALIZED merge of one already-built PR to \`${a.defaultBranch}\` in repo ${a.repo}, headless, with no human. Only one merge runs at a time; you are it right now.
 
@@ -439,6 +444,8 @@ if (runAutofix) {
         pr: built?.pr_url || null,
         merged: false,
         cause: built?.p0 ? 'P0 on autofix diff; PR left open' : built?.cause || 'autofix build not mergeable',
+        skipped_fixes: built?.skipped_fixes || [],
+        residual_closed: false,
       });
       continue;
     }
@@ -448,13 +455,23 @@ if (runAutofix) {
       schema: MERGE_SCHEMA,
     });
     const merged = !!(mResult.merged && mResult.ci_green !== false);
+    // A skipped fix means the autofix PR only Relates-to the residual, so it stays
+    // open even though triage disposition was close-via-autofix. Surface both so the
+    // report can tell "closed, all applied" from "kept-open, some skipped".
+    const skipped = built.skipped_fixes || [];
+    const residualClosed = merged && closeDisposition(tr) === 'close-via-autofix' && skipped.length === 0;
     autofixed.push({
       residual_issue: residualIssue,
       pr: built.pr_url || null,
       merged,
       cause: merged ? null : mResult.cause || 'autofix merge not green',
+      skipped_fixes: skipped,
+      residual_closed: residualClosed,
     });
-    log(`Autofix #${residualIssue}: ${merged ? 'merged' : 'stalled — ' + (mResult.cause || 'not green')}`);
+    log(
+      `Autofix #${residualIssue}: ${merged ? 'merged' : 'stalled — ' + (mResult.cause || 'not green')}` +
+        (skipped.length ? ` (residual kept open; ${skipped.length} fix(es) skipped)` : ''),
+    );
   }
 }
 
