@@ -101,7 +101,7 @@ const DISCOVER_SCHEMA = {
 const PLAN_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['issue', 'route', 'summary'],
+  required: ['issue', 'route', 'summary', 'routing'],
   properties: {
     issue: { type: 'integer' },
     route: { type: 'string', enum: ['fix', 'needs-input', 'umbrella', 'yielded'] },
@@ -110,6 +110,26 @@ const PLAN_SCHEMA = {
     // subagent already deleted its own losing claim).
     claim_comment_id: { type: ['integer', 'null'] },
     summary: { type: 'string', minLength: 1 }, // what the change is, in one paragraph
+    // Model routing for the build agent, judged by the fable-pinned plan step
+    // against the shared complexity rubric
+    // (../cw-orchestrate/references/complexity-rubric.md). provider is an OPEN
+    // enum (a seam for a future codex/GPT route); v1 executes Claude tiers only
+    // — dispatch is routedAgentOpts() (canonical in routing.mjs), which
+    // defaults UP to opus for anything it cannot execute. Null only on a
+    // yielded plan. Routing lives only in run artifacts and log() output; it is
+    // never written back to issues.
+    routing: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      required: ['provider', 'model', 'effort', 'complexity', 'rationale'],
+      properties: {
+        provider: { type: 'string', minLength: 1 },
+        model: { type: 'string', enum: ['fable', 'opus', 'sonnet', 'haiku'] },
+        effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
+        complexity: { type: 'string', enum: ['mechanical', 'standard', 'complex'] },
+        rationale: { type: 'string', minLength: 1 },
+      },
+    },
     open_questions: { type: 'array', items: { type: 'string' } }, // design forks for the operator
     umbrella_scope: {
       type: ['object', 'null'],
@@ -286,6 +306,23 @@ function mergeVerdict(m) {
 }
 
 // ---------------------------------------------------------------------------
+// Pure model-routing dispatch — MIRROR of routing.mjs (kept in sync; tested
+// there). Maps the plan's routing block (judged against the shared
+// complexity rubric in ../cw-orchestrate/references/complexity-rubric.md) to
+// `agent()` opts for the build agent. v1 executes Claude tiers only; anything
+// else defaults UP to opus (route-up bias). Do not edit one copy without the
+// other.
+// ---------------------------------------------------------------------------
+
+function routedAgentOpts(routing) {
+  const r = routing || {};
+  const models = ['fable', 'opus', 'sonnet', 'haiku'];
+  const efforts = ['low', 'medium', 'high', 'xhigh', 'max'];
+  if (r.provider !== 'claude' || !models.includes(r.model)) return { model: 'opus' };
+  return efforts.includes(r.effort) ? { model: r.model, effort: r.effort } : { model: r.model };
+}
+
+// ---------------------------------------------------------------------------
 // Role prompt builders
 // ---------------------------------------------------------------------------
 
@@ -339,7 +376,7 @@ STEP 0 — CLAIM THIS ISSUE (race-safe; before ANY analysis). Several cw-ship ru
      \`gh api repos/${a.repo}/issues/${issue}/comments --paginate --jq '.[] | select(.body | contains("<!-- cw-ship/claim -->")) | {id, created_at}'\`
      Also determine, for staleness: is there an OPEN PR referencing #${issue}? and the issue's updatedAt. A claim is STALE iff it is >2h old AND there is no open PR for the issue AND the issue's updatedAt is >2h ago. The OWNER is the claim with the EARLIEST created_at among NON-stale claims; ties broken by the LOWEST numeric comment id.
   d. If \$MY_ID is the owner → you hold the issue; continue to STEP 1.
-     If \$MY_ID is NOT the owner → another run claimed first. YIELD: delete your own claim comment (\`gh api -X DELETE repos/${a.repo}/issues/comments/\$MY_ID\`), do NOT remove cw-feedback:triaging (the owner needs it), and return { issue: ${issue}, route: "yielded", claim_comment_id: null, summary: "yielded: <owner claim id> owns this issue" } WITHOUT analyzing or building anything. This is the whole point — never build an issue you do not own.
+     If \$MY_ID is NOT the owner → another run claimed first. YIELD: delete your own claim comment (\`gh api -X DELETE repos/${a.repo}/issues/comments/\$MY_ID\`), do NOT remove cw-feedback:triaging (the owner needs it), and return { issue: ${issue}, route: "yielded", claim_comment_id: null, summary: "yielded: <owner claim id> owns this issue", routing: null } WITHOUT analyzing or building anything. This is the whole point — never build an issue you do not own.
   (A reclaimed issue's prior claim is stale, so your fresh claim is the only non-stale one and you become the owner.)
 
 STEP 1 — UNDERSTAND THE INTENT:
@@ -355,7 +392,14 @@ STEP 3 — ROUTE. Choose exactly one:
 
 Be conservative: prefer "fix" for bounded work, reserve "needs-input" for real forks, reserve "umbrella" for genuinely large initiatives. Set open_questions=[] and umbrella_scope=null when not applicable.
 
-Return structured output: { issue: ${issue}, route, claim_comment_id, summary, open_questions, umbrella_scope }. When you OWN the issue, set claim_comment_id = \$MY_ID (the id from STEP 0a) so a later release can delete your claim. When you yielded, route="yielded" and claim_comment_id=null.`;
+STEP 4 — ROUTE THE BUILD (shared complexity rubric: skills/cw-orchestrate/references/complexity-rubric.md in the craftwork-skills repo — the rules here are the operative copy). Judge how hard the change is to implement CORRECTLY and emit a routing block for the downstream build agent. The driver is quality matching, not cost:
+- Route UP when uncertain: model "opus" is the DEFAULT. "haiku"/"sonnet" require POSITIVE EVIDENCE of mechanical work (bounded, pattern-following, no design judgment — a rename, a config bump, a doc tweak); absence of evidence of difficulty is NOT evidence of mechanical work. Genuinely hard work (cross-cutting design, subtle concurrency/correctness, security-sensitive surface) routes to "fable".
+- Effort is a second dial: prefer routing the model UP and the effort DOWN over dropping a tier — "opus" at "low" effort is a valid route for mechanical work. Cost savings are incidental, never the deciding factor.
+- Operator override is escalate-only: an explicit "Routing: <tier>" line in the issue body is a FLOOR — you may route above it, never below it.
+- Routing lives ONLY in your structured output (run artifacts and workflow log output). NEVER write it back to the issue.
+Set provider "claude" (the field is an open seam for future providers; v1 executes Claude tiers only), model one of "fable"|"opus"|"sonnet"|"haiku", effort one of "low"|"medium"|"high"|"xhigh"|"max", complexity one of "mechanical"|"standard"|"complex", and rationale one line citing your evidence. Emit routing on EVERY plan you researched (only the "fix" route consumes it, but the artifact stays complete); routing = null ONLY on a yielded plan.
+
+Return structured output: { issue: ${issue}, route, claim_comment_id, summary, open_questions, umbrella_scope, routing }. When you OWN the issue, set claim_comment_id = \$MY_ID (the id from STEP 0a) so a later release can delete your claim. When you yielded, route="yielded" and claim_comment_id=null.`;
 
 const parkPrompt = (a, p, reason) => `You are PARKING one feedback issue for the operator's input, using gh via Bash. Repo ${a.repo}. Issue: ${p.url} (#${p.issue}).
 
@@ -514,10 +558,14 @@ const serialMerge = (fn) => {
 const outcomes = await pipeline(
   issues,
   // Stage 1 — plan (claim + classify). Streams onward the instant THIS plan lands.
+  // Planning is PINNED to fable (model: 'fable') so plan quality never depends
+  // on the operator's session model; the plan itself routes the build agent
+  // (see PLAN_SCHEMA.routing + the shared complexity rubric).
   (it) =>
     agent(planPrompt(cfg, it.issue, it.url, it.has_go, it.reclaim === true), {
       label: `plan:${it.issue}`,
       phase: 'Plan',
+      model: 'fable',
       schema: PLAN_SCHEMA,
     }).then((plan) => (plan ? { issue: it.issue, url: it.url, hasGo: it.has_go, plan } : null)),
   // Stage 2 — resolve by disposition, without waiting on sibling plans.
@@ -550,11 +598,20 @@ const outcomes = await pipeline(
 
     // disposition === 'build'
     if (!runBuild) return { ...p, disposition };
+    // The build agent runs on the model + effort the plan routed (default up
+    // to opus when the routing is unavailable or not executable in v1).
+    const routing = p.plan.routing || null;
+    log(
+      `#${p.issue} build routed: ${
+        routing ? `${routing.provider}/${routing.model} effort=${routing.effort} (${routing.complexity}) — ${routing.rationale}` : 'no routing on plan — defaulting up to opus'
+      }`,
+    );
     const b = await agent(buildPrompt(cfg, p), {
       label: `build:${p.issue}`,
       phase: 'Resolve',
       isolation: 'worktree',
       schema: BUILD_SCHEMA,
+      ...routedAgentOpts(routing),
     });
     if (!b || !b.ready_to_merge || b.p0) {
       // A planner-missed design fork surfaces here as cause "needs-input: ...".

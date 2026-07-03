@@ -38,11 +38,30 @@ export const meta = {
 const OWNERSHIP_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['issue', 'plan_markdown', 'ownership_paths'],
+  required: ['issue', 'plan_markdown', 'ownership_paths', 'routing'],
   properties: {
     issue: { type: 'integer' },
     plan_markdown: { type: 'string', minLength: 1 },
     ownership_paths: { type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1 },
+    // Model routing for the downstream work/autofix agents, judged by the
+    // Fable-pinned plan step against the shared complexity rubric
+    // (references/complexity-rubric.md). provider is an OPEN enum (a seam for
+    // a future codex/GPT route); v1 executes Claude tiers only — dispatch is
+    // routedAgentOpts() (canonical in routing.mjs), which defaults UP to opus
+    // for anything it cannot execute. Routing lives only in run artifacts and
+    // log() output; it is never written back to issues.
+    routing: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['provider', 'model', 'effort', 'complexity', 'rationale'],
+      properties: {
+        provider: { type: 'string', minLength: 1 },
+        model: { type: 'string', enum: ['fable', 'opus', 'sonnet', 'haiku'] },
+        effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
+        complexity: { type: 'string', enum: ['mechanical', 'standard', 'complex'] },
+        rationale: { type: 'string', minLength: 1 },
+      },
+    },
   },
 };
 
@@ -427,6 +446,22 @@ function mergeVerdict(m) {
 }
 
 // ---------------------------------------------------------------------------
+// Pure model-routing dispatch — MIRROR of routing.mjs (kept in sync; tested
+// there). Maps the plan's routing block (judged against
+// references/complexity-rubric.md) to `agent()` opts for work/autofix agents.
+// v1 executes Claude tiers only; anything else defaults UP to opus (route-up
+// bias). Do not edit one copy without the other.
+// ---------------------------------------------------------------------------
+
+function routedAgentOpts(routing) {
+  const r = routing || {};
+  const models = ['fable', 'opus', 'sonnet', 'haiku'];
+  const efforts = ['low', 'medium', 'high', 'xhigh', 'max'];
+  if (r.provider !== 'claude' || !models.includes(r.model)) return { model: 'opus' };
+  return efforts.includes(r.effort) ? { model: r.model, effort: r.effort } : { model: r.model };
+}
+
+// ---------------------------------------------------------------------------
 // Role prompt builders (mirror references/subagent-roles.md & merge-safety.md).
 //
 // planPrompt, workPrompt, mergePrompt, triagePrompt, and autofixPrompt are
@@ -452,7 +487,14 @@ Apply senior-engineer planning discipline: state key decisions, break the work i
 
 Then enumerate the COMPLETE set of repo-relative paths your implementation will create or modify — source, generated, and test files. Be exhaustive and conservative: a path you will touch but omit becomes an undetected merge collision later. List a path even if only moderately sure. Do not list paths you are confident you will not touch.
 
-Return structured output: { issue, plan_markdown, ownership_paths }.`;
+Finally, ROUTE THE BUILD (shared complexity rubric: references/complexity-rubric.md in the craftwork-skills repo — the rules here are the operative copy). Judge how hard this issue is to implement CORRECTLY and emit a routing block for the downstream work agent. The driver is quality matching, not cost:
+- Route UP when uncertain: model "opus" is the DEFAULT. "haiku"/"sonnet" require POSITIVE EVIDENCE of mechanical work (bounded, pattern-following, no design judgment — a rename, a config bump, a doc tweak); absence of evidence of difficulty is NOT evidence of mechanical work. Genuinely hard work (cross-cutting design, subtle concurrency/correctness, security-sensitive surface) routes to "fable".
+- Effort is a second dial: prefer routing the model UP and the effort DOWN over dropping a tier — "opus" at "low" effort is a valid route for mechanical work. Cost savings are incidental, never the deciding factor.
+- Operator override is escalate-only: an explicit "Routing: <tier>" line in the issue body or the brief is a FLOOR — you may route above it, never below it.
+- Routing lives ONLY in your structured output (run artifacts and workflow log output). NEVER write it back to the issue.
+Set provider "claude" (the field is an open seam for future providers; v1 executes Claude tiers only), model one of "fable"|"opus"|"sonnet"|"haiku", effort one of "low"|"medium"|"high"|"xhigh"|"max", complexity one of "mechanical"|"standard"|"complex", and rationale one line citing your evidence.
+
+Return structured output: { issue, plan_markdown, ownership_paths, routing: { provider, model, effort, complexity, rationale } }.`;
 };
 
 const reviewPrompt = (m, issue, planMarkdown, briefText) => `You are doc-reviewing an implementation plan in a fresh context. Judge whether the plan is fit to execute hands-off, with no human gate between here and merge.
@@ -722,16 +764,29 @@ const triageOne = (subIssue, residualUrl, prUrl) =>
 const isTerminal = (issue) => status.has(issue); // merged or stalled
 
 // Plan -> review -> file-residual for one issue (the deferred head of its chain).
+// Plan and plan-review are PINNED to fable (model: 'fable') so planning quality
+// never depends on the operator's session model; the plan itself routes the
+// downstream work agent (see OWNERSHIP_SCHEMA.routing + complexity-rubric.md).
+// The reviewer-floor rule (a reviewer never runs below the builder it reviews)
+// is structurally satisfied: plan review is fable-pinned (the top tier) and
+// diff review is the work agent's self-review.
 const planChain = async (it) => {
   const plan = await agent(planPrompt(manifest, it, briefText.get(it.number) || 'MISSING BRIEF'), {
     label: `plan:${it.number}`,
     phase: 'Plan',
+    model: 'fable',
     schema: OWNERSHIP_SCHEMA,
   });
   let node = { ...it, ...plan };
+  const r = node.routing;
+  log(
+    `#${it.number} build routed: ${
+      r ? `${r.provider}/${r.model} effort=${r.effort} (${r.complexity}) — ${r.rationale}` : 'no routing on plan — defaulting up to opus'
+    }`,
+  );
   const verdict = await agent(
     reviewPrompt(manifest, it, node.plan_markdown, briefText.get(it.number) || ''),
-    { label: `review:${it.number}`, phase: 'Review', schema: REVIEW_SCHEMA },
+    { label: `review:${it.number}`, phase: 'Review', model: 'fable', schema: REVIEW_SCHEMA },
   );
   node = { ...node, p0: verdict.p0, residuals: verdict.residuals };
   if (node.residuals && node.residuals.length > 0) {
@@ -835,6 +890,8 @@ if (!scheduleError) {
     if (workEligible.length === 0) break; // nothing left to advance
 
     phase('Work');
+    // Each work agent runs on the model + effort its plan routed (default up to
+    // opus when the routing is unavailable or not executable in v1).
     const built = await parallel(
       workEligible.map((issue) => () =>
         agent(workPrompt(manifest, planByIssue.get(issue)), {
@@ -842,6 +899,7 @@ if (!scheduleError) {
           phase: 'Work',
           isolation: 'worktree',
           schema: BUILD_SCHEMA,
+          ...routedAgentOpts(planByIssue.get(issue).routing),
         }),
       ),
     );
@@ -887,11 +945,23 @@ const autofixed = [];
 const autofixQueue = autofixCandidates(triageResults);
 for (const residualIssue of autofixQueue) {
   const tr = triageResults.find((t) => t.residual_issue === residualIssue);
+  // The autofix agent inherits the parent node's routed model + effort (its
+  // fixes land on the same surface the node built); when that routing is
+  // unavailable, routedAgentOpts defaults UP to opus.
+  const parentRouting = planByIssue.get(tr.sub_issue)?.routing || null;
+  log(
+    `Autofix #${residualIssue} routed: ${
+      parentRouting
+        ? `${parentRouting.provider}/${parentRouting.model} effort=${parentRouting.effort} (parent #${tr.sub_issue})`
+        : `parent #${tr.sub_issue} routing unavailable — defaulting up to opus`
+    }`,
+  );
   const built = await agent(autofixPrompt(manifest, tr), {
     label: `autofix:${residualIssue}`,
     phase: 'Autofix',
     isolation: 'worktree',
     schema: BUILD_SCHEMA,
+    ...routedAgentOpts(parentRouting),
   });
   if (!built || !built.ready_to_merge || built.p0) {
     autofixed.push({
