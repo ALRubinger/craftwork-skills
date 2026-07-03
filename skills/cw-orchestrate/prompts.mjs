@@ -33,7 +33,14 @@ Apply senior-engineer planning discipline: state key decisions, break the work i
 
 Then enumerate the COMPLETE set of repo-relative paths your implementation will create or modify — source, generated, and test files. Be exhaustive and conservative: a path you will touch but omit becomes an undetected merge collision later. List a path even if only moderately sure. Do not list paths you are confident you will not touch.
 
-Return structured output: { issue, plan_markdown, ownership_paths }.`;
+Finally, ROUTE THE BUILD (shared complexity rubric: references/complexity-rubric.md in the craftwork-skills repo — the rules here are the operative copy). Judge how hard this issue is to implement CORRECTLY and emit a routing block for the downstream work agent. The driver is quality matching, not cost:
+- Route UP when uncertain: model "opus" is the DEFAULT. "haiku"/"sonnet" require POSITIVE EVIDENCE of mechanical work (bounded, pattern-following, no design judgment — a rename, a config bump, a doc tweak); absence of evidence of difficulty is NOT evidence of mechanical work. Genuinely hard work (cross-cutting design, subtle concurrency/correctness, security-sensitive surface) routes to "fable".
+- Effort is a second dial: prefer routing the model UP and the effort DOWN over dropping a tier — "opus" at "low" effort is a valid route for mechanical work. Cost savings are incidental, never the deciding factor.
+- Operator override is escalate-only: an explicit "Routing: <tier>" line in the issue body or the brief is a FLOOR — you may route above it, never below it.
+- Routing lives ONLY in your structured output (run artifacts and workflow log output). NEVER write it back to the issue.
+Set provider "claude" (the field is an open seam for future providers; v1 executes Claude tiers only), model one of "fable"|"opus"|"sonnet"|"haiku", effort one of "low"|"medium"|"high"|"xhigh"|"max", complexity one of "mechanical"|"standard"|"complex", and rationale one line citing your evidence.
+
+Return structured output: { issue, plan_markdown, ownership_paths, routing: { provider, model, effort, complexity, rationale } }.`;
 };
 
 export const workPrompt = (m, node) => {
