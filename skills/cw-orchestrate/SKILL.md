@@ -41,7 +41,6 @@ Do **not** use for a single issue (just plan + work it directly), or when the us
 - [references/readiness-sweep.md](./references/readiness-sweep.md) — sweep routing + brief-completeness gate
 - [references/manifest-schema.md](./references/manifest-schema.md) — manifest + brief contract (the sweep → Workflow handoff)
 - [references/subagent-roles.md](./references/subagent-roles.md) — plan / review / work role prompts + output schemas (mirrors what `workflow.js` inlines)
-- [references/complexity-rubric.md](./references/complexity-rubric.md) — model routing: Fable-pinned plan/review judges complexity and routes build/autofix agents (shared with cw-ship)
 - [references/residual-triage.md](./references/residual-triage.md) — triage + autofix roles: re-judge filed residuals against shipped code, close/fix/escalate
 - [references/merge-safety.md](./references/merge-safety.md) — serialization, pre-merge `git merge-tree`, P0 / conflict halt rules
 

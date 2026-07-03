@@ -10,9 +10,7 @@ A note on schemas: `agent(prompt, { schema })` forces the subagent to call a `St
 
 ## Plan role (U4 — R7, R8)
 
-**Purpose:** Produce a plan for one sub-issue, a machine-parseable file-ownership table the scheduler can intersect, and a model-routing block for the downstream work agent.
-
-**Dispatch:** pinned to Fable (`model: 'fable'` on the `agent()` call) so planning quality never depends on the operator's session model. The same pin applies to the review role below; see [complexity-rubric.md](./complexity-rubric.md) for the full routing contract.
+**Purpose:** Produce a plan for one sub-issue and a machine-parseable file-ownership table the scheduler can intersect.
 
 **Inputs (interpolated into the prompt):** the sub-issue number/title, the full readiness brief text (and, for back-off issues, the linked `ce-brainstorm` doc), the repo and default branch.
 
@@ -31,8 +29,6 @@ A note on schemas: `agent(prompt, { schema })` forces the subagent to call a `St
 >
 > Then enumerate the **complete set of repo-relative paths** your implementation will create or modify — source, generated, and test files. Be exhaustive and conservative: a path you will touch but omit becomes an undetected merge collision later. List a path even if you are only moderately sure you will touch it. Do not list paths you are confident you will not touch (over-listing serializes unrelated work unnecessarily).
 >
-> Finally, **route the build**: judge the issue's complexity against the shared [complexity rubric](./complexity-rubric.md) (route UP when uncertain — Opus default, Haiku/Sonnet only on positive evidence of mechanical work, effort as a second dial; an explicit `Routing: <tier>` line in the issue body is a floor, never a ceiling) and emit a `routing` block. Routing lives only in the structured output and workflow logs — never written back to the issue.
->
 > Return structured output conforming to the schema.
 
 **Output schema (`OWNERSHIP_SCHEMA`):**
@@ -41,7 +37,7 @@ A note on schemas: `agent(prompt, { schema })` forces the subagent to call a `St
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["issue", "plan_markdown", "ownership_paths", "routing"],
+  "required": ["issue", "plan_markdown", "ownership_paths"],
   "properties": {
     "issue":         { "type": "integer" },
     "plan_markdown": { "type": "string", "minLength": 1 },
@@ -49,18 +45,6 @@ A note on schemas: `agent(prompt, { schema })` forces the subagent to call a `St
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
       "minItems": 1
-    },
-    "routing": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["provider", "model", "effort", "complexity", "rationale"],
-      "properties": {
-        "provider":   { "type": "string", "minLength": 1 },
-        "model":      { "type": "string", "enum": ["fable", "opus", "sonnet", "haiku"] },
-        "effort":     { "type": "string", "enum": ["low", "medium", "high", "xhigh", "max"] },
-        "complexity": { "type": "string", "enum": ["mechanical", "standard", "complex"] },
-        "rationale":  { "type": "string", "minLength": 1 }
-      }
     }
   }
 }
@@ -69,15 +53,12 @@ A note on schemas: `agent(prompt, { schema })` forces the subagent to call a `St
 - `ownership_paths` are repo-relative (`internal/api/openapi.yaml`, not absolute). The scheduler intersects these across issues; absolute or inconsistent paths would defeat the set-intersection.
 - The Workflow writes `plan_markdown` to `docs/plans/` (or the run working dir) as the durable handoff to the work role.
 - Plan subagents run **fully in parallel** — planning produces documents only and carries no code-level ordering (R8).
-- `routing` steers the work/autofix agents: the Workflow passes the routed `model` + `effort` into their `agent()` opts via `routedAgentOpts()` (canonical in `routing.mjs`, mirrored in `workflow.js`). `provider` is an open enum (a seam for a future codex/GPT route); v1 executes Claude tiers only, and anything not executable defaults **up** to `opus`. See [complexity-rubric.md](./complexity-rubric.md).
 
 ---
 
 ## Review role (Stage 1.5, U5 — R9, R10, R11)
 
 **Purpose:** Doc-review one plan. Decide P0 (halt) vs. non-P0 (file-and-proceed), and emit the residual findings to file.
-
-**Dispatch:** pinned to Fable (`model: 'fable'`), like the plan role. This also satisfies the reviewer floor (a reviewer never runs below the builder it reviews) structurally: plan review is top-tier by pin, and diff review is the work agent's self-review. See [complexity-rubric.md](./complexity-rubric.md).
 
 **Inputs:** the plan markdown, the issue number, the umbrella number, the brief (for intent comparison).
 
@@ -153,7 +134,7 @@ gh issue create \
 
 **Purpose:** Take one scheduled node from plan to a merged PR, in an isolated worktree, under the full merge-safety contract.
 
-**Dispatch:** `agent(workPrompt(node), { isolation: 'worktree', schema: BUILD_SCHEMA, phase: 'Work', ...routedAgentOpts(node.routing) })`. The `isolation: 'worktree'` gives the subagent its own working tree so nodes building in parallel don't corrupt each other's index. `routedAgentOpts(node.routing)` runs the agent on the model + effort its plan routed (see [complexity-rubric.md](./complexity-rubric.md)), defaulting up to `opus` when the routing is unavailable or not executable in v1; autofix agents inherit the parent node's routing the same way.
+**Dispatch:** `agent(workPrompt(node), { isolation: 'worktree', schema: BUILD_SCHEMA, phase: 'Work' })`. The `isolation: 'worktree'` gives the subagent its own working tree so nodes building in parallel don't corrupt each other's index.
 
 **The work role does NOT merge.** It implements, opens the PR, and runs a code-review pass, then returns. The Workflow performs the actual merge **serially** in a separate step (see `merge-safety.md`) so only one node merges to the default branch at a time.
 

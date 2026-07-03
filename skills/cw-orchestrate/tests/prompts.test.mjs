@@ -42,10 +42,6 @@ test('triagePrompt (with PR hint) is byte-identical to the captured golden', () 
   assert.equal(triagePrompt(baseManifest, 7, 'http://res/1', 'http://pr/12'), goldens.triagePrompt_hint);
 });
 
-test('planPrompt is byte-identical to the captured golden', () => {
-  assert.equal(planPrompt(baseManifest, { number: 7, title: 'Title' }, 'BRIEF'), goldens.planPrompt);
-});
-
 // --- Every branch reference resolves to defaultBranch ---
 
 test('workPrompt forks off defaultBranch and opens no explicit --base', () => {
@@ -68,39 +64,6 @@ test('planPrompt grounds against defaultBranch', () => {
   const p = planPrompt(baseManifest, planIssue, briefText);
   assert.ok(p.includes('git fetch origin main -q'));
   assert.ok(p.includes('read the relevant files at `origin/main` HEAD'));
-});
-
-// --- Model routing (feedback #85): the plan step routes the build ---
-
-test('planPrompt cites the shared complexity rubric and asks for a routing block', () => {
-  const p = planPrompt(baseManifest, planIssue, briefText);
-  assert.ok(p.includes('references/complexity-rubric.md'), 'must cite the shared rubric file');
-  assert.ok(p.includes('ROUTE THE BUILD'));
-  assert.match(p, /Return structured output: \{ issue, plan_markdown, ownership_paths, routing: \{ provider, model, effort, complexity, rationale \} \}\./);
-});
-
-test('planPrompt encodes the route-up bias (opus default, positive evidence for lower tiers)', () => {
-  const p = planPrompt(baseManifest, planIssue, briefText);
-  assert.ok(p.includes('Route UP when uncertain'));
-  assert.ok(p.includes('model "opus" is the DEFAULT'));
-  assert.ok(p.includes('POSITIVE EVIDENCE of mechanical work'));
-  assert.ok(p.includes('Effort is a second dial'));
-  assert.ok(p.includes('"opus" at "low" effort is a valid route for mechanical work'));
-});
-
-test('planPrompt encodes the escalate-only operator override and the no-write-back rule', () => {
-  const p = planPrompt(baseManifest, planIssue, briefText);
-  assert.ok(p.includes('"Routing: <tier>" line'));
-  assert.ok(p.includes('FLOOR — you may route above it, never below it'));
-  assert.ok(p.includes('NEVER write it back to the issue'));
-});
-
-test('planPrompt keeps the provider seam open but pins the v1 enums', () => {
-  const p = planPrompt(baseManifest, planIssue, briefText);
-  assert.ok(p.includes('v1 executes Claude tiers only'));
-  assert.ok(p.includes('"fable"|"opus"|"sonnet"|"haiku"'));
-  assert.ok(p.includes('"low"|"medium"|"high"|"xhigh"|"max"'));
-  assert.ok(p.includes('"mechanical"|"standard"|"complex"'));
 });
 
 const autofixTr = {

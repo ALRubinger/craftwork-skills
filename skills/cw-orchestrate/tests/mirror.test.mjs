@@ -42,7 +42,6 @@ const normalize = (s) =>
 const schedulerSrc = readFileSync(join(root, 'scheduler.mjs'), 'utf8');
 const triageSrc = readFileSync(join(root, 'triage.mjs'), 'utf8');
 const mergeCiSrc = readFileSync(join(root, 'merge-ci.mjs'), 'utf8');
-const routingSrc = readFileSync(join(root, 'routing.mjs'), 'utf8');
 const workflowSrc = readFileSync(join(root, 'workflow.js'), 'utf8');
 
 // Drift guard for the prompt builders (workPrompt/mergePrompt/triagePrompt):
@@ -117,12 +116,6 @@ for (const fn of ['classifyPostMergeCI', 'postMergeCIStalls', 'mergeVerdict']) {
     assert.equal(mirror, canonical, `${fn} has drifted between merge-ci.mjs and workflow.js`);
   });
 }
-
-test('workflow.js mirror of routedAgentOpts matches routing.mjs', () => {
-  const canonical = normalize(extractFunction(routingSrc, 'routedAgentOpts'));
-  const mirror = normalize(extractFunction(workflowSrc, 'routedAgentOpts'));
-  assert.equal(mirror, canonical, 'routedAgentOpts has drifted between routing.mjs and workflow.js');
-});
 
 // Prompt builders: compare rendered output (not source text) across a couple of
 // manifests (varying defaultBranch) so any drift between the canonical

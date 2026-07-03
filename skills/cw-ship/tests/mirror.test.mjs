@@ -39,7 +39,6 @@ const normalize = (s) =>
 
 const triageSrc = readFileSync(join(root, 'triage.mjs'), 'utf8');
 const mergeSrc = readFileSync(join(root, 'merge.mjs'), 'utf8');
-const routingSrc = readFileSync(join(root, 'routing.mjs'), 'utf8');
 const workflowSrc = readFileSync(join(root, 'workflow.js'), 'utf8');
 
 for (const fn of ['dispositionFor', 'parkReason', 'actionQueues', 'escalations']) {
@@ -57,9 +56,3 @@ for (const fn of ['classifyPostMergeCI', 'postMergeCIStalls', 'mergeVerdict']) {
     assert.equal(mirror, canonical, `${fn} has drifted between merge.mjs and workflow.js`);
   });
 }
-
-test('workflow.js mirror of routedAgentOpts matches routing.mjs', () => {
-  const canonical = normalize(extractFunction(routingSrc, 'routedAgentOpts'));
-  const mirror = normalize(extractFunction(workflowSrc, 'routedAgentOpts'));
-  assert.equal(mirror, canonical, 'routedAgentOpts has drifted between routing.mjs and workflow.js');
-});
