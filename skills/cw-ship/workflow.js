@@ -4,10 +4,11 @@
 // Runs headless in the background. Turns captured `cw-feedback:new` / `cw-feedback:go`
 // issues into merged changes:
 //   - small/medium, no open questions -> branch -> PR (Closes #issue) -> squash-merge
-//   - open design questions, OR umbrella-sized but not yet cleared -> PARK:
-//     write questions / proposed scope into the issue body, set cw-feedback:needs-input
-//   - umbrella-sized AND cw-feedback:go present -> file a ready umbrella + sub-issues;
-//     SKILL.md then runs /cw-orchestrate against it to execute autonomously.
+//   - a genuine design fork remains -> PARK: write the questions into the issue body,
+//     set cw-feedback:needs-input (the operator answers via /cw-resolve, adds cw-feedback:go)
+//   - umbrella-sized AND intent clear -> file a ready umbrella + sub-issues (no cw-feedback:go
+//     gate); SKILL.md then runs /cw-orchestrate against it to execute autonomously.
+//     A dry triage (build:false) reports the umbrella disposition but files nothing.
 //
 // Determinism: Workflow scripts forbid Date.now(), Math.random(), and argless
 // `new Date()`. This skill mints no timestamps and writes no scratch.
@@ -201,20 +202,18 @@ const UMBRELLA_SCHEMA = {
 // implementation is duplicated here verbatim. Do not edit one without the other.
 // ---------------------------------------------------------------------------
 
-function dispositionFor(plan, hasGo) {
+function dispositionFor(plan) {
   if (!plan || !plan.route) return 'park';
   if (plan.route === 'yielded') return 'skip'; // lost the claim race — another run owns this issue
   if (plan.route === 'needs-input') return 'park';
-  if (plan.route === 'umbrella') return hasGo ? 'umbrella' : 'park';
+  if (plan.route === 'umbrella') return 'umbrella'; // umbrella-sized + intent clear auto-files; go is not required
   // route === 'fix'
   const qs = ((plan.open_questions || []).length);
   return qs > 0 ? 'park' : 'build';
 }
 
-function parkReason(plan, hasGo) {
-  if (dispositionFor(plan, hasGo) !== 'park') return null;
-  if (plan && plan.route === 'umbrella') return 'umbrella-scope';
-  return 'open-questions';
+function parkReason(plan) {
+  return dispositionFor(plan) === 'park' ? 'open-questions' : null;
 }
 
 function actionQueues(planned) {
@@ -222,7 +221,7 @@ function actionQueues(planned) {
   const umbrella = [];
   const park = [];
   for (const p of (planned || []).filter(Boolean)) {
-    const d = dispositionFor(p.plan, p.hasGo);
+    const d = dispositionFor(p.plan);
     if (d === 'build') build.push(p);
     else if (d === 'umbrella') umbrella.push(p);
     else if (d === 'park') park.push(p);
@@ -234,11 +233,11 @@ function actionQueues(planned) {
 function escalations(planned) {
   return (planned || [])
     .filter(Boolean)
-    .filter((p) => dispositionFor(p.plan, p.hasGo) === 'park')
+    .filter((p) => dispositionFor(p.plan) === 'park')
     .map((p) => ({
       issue: p.issue,
       url: p.url,
-      reason: parkReason(p.plan, p.hasGo),
+      reason: parkReason(p.plan),
       questions: (p.plan && p.plan.open_questions) || [],
     }))
     .sort((a, b) => a.issue - b.issue);
@@ -351,15 +350,15 @@ Locate the surface in the repo. Confirm what currently happens vs. what the oper
 STEP 3 — ROUTE. Choose exactly one:
 - "fix" — the change is a SINGLE squash-mergeable PR and you understand it well enough to implement it correctly with no further operator input. Default to this whenever the work is bounded and the intent is clear (after research). This is the common, desired case: just fix the thing.
 - "needs-input" — a genuine DESIGN FORK remains that only the operator should decide (a real trade-off, an exact user-facing string, a scope boundary, a behavior choice). Put each such fork in open_questions as a crisp question, ideally with a recommended answer. Use this ONLY for forks a competent implementer shouldn't decide alone — not for things you can reasonably settle yourself. If this issue is already cw-feedback:go, the operator answered the prior questions; only route needs-input again if a NEW fork surfaced that their answers didn't cover.
-- "umbrella" — the change is genuinely multi-PR (several independently mergeable units). Provide umbrella_scope { title, why, sub_issues:[{title, what}] } at one-PR granularity per sub-issue. Keep the scope self-contained: state every decision inline, never as "see the brainstorm doc" or a pointer to an uncommitted/local file — a fresh session must be able to act on the scope text alone. (If the issue is NOT yet cw-feedback:go, this scope will be parked into the body for the operator to approve; if it IS cw-feedback:go, it will be filed and orchestrated.)
+- "umbrella" — the change is genuinely multi-PR (several independently mergeable units) AND its intent is clear enough to scope now. Provide umbrella_scope { title, why, sub_issues:[{title, what}] } at one-PR granularity per sub-issue. Keep the scope self-contained: state every decision inline, never as "see the brainstorm doc" or a pointer to an uncommitted/local file — a fresh session must be able to act on the scope text alone. This scope is FILED and handed to cw-orchestrate DIRECTLY — there is no separate operator scope-approval step, and cw-feedback:go is NOT required to file it. So route "umbrella" only when you could scope it correctly yourself; if a genuine design fork still shapes the breakdown (which units exist, or a real trade-off among them), route "needs-input" instead so it parks for the operator — being umbrella-sized is never itself a reason to park.
 
 Be conservative: prefer "fix" for bounded work, reserve "needs-input" for real forks, reserve "umbrella" for genuinely large initiatives. Set open_questions=[] and umbrella_scope=null when not applicable.
 
 Return structured output: { issue: ${issue}, route, claim_comment_id, summary, open_questions, umbrella_scope }. When you OWN the issue, set claim_comment_id = \$MY_ID (the id from STEP 0a) so a later release can delete your claim. When you yielded, route="yielded" and claim_comment_id=null.`;
 
-const parkPrompt = (a, p, reason) => `You are PARKING one feedback issue for the operator's input, using gh via Bash. Repo ${a.repo}. Issue: ${p.url} (#${p.issue}).
+const parkPrompt = (a, p) => `You are PARKING one feedback issue for the operator's input, using gh via Bash. Repo ${a.repo}. Issue: ${p.url} (#${p.issue}).
 
-Reason: ${reason === 'umbrella-scope' ? 'this feedback is umbrella-sized and needs the operator to approve a proposed scope before it is filed and executed.' : 'a design fork remains that only the operator should decide.'}
+Reason: a genuine design fork remains that only the operator should decide. (Umbrella-sized-but-clear feedback is NOT parked — it is filed and orchestrated directly; parking is only ever for a real design decision.)
 
 IMPORTANT — you run CONCURRENTLY with other park subagents that share the workflow's working directory (the operator's PRIMARY checkout). Write NO scratch into that checkout: as your FIRST step create a private temp dir (\`D=\"\$(mktemp -d)\"\`) and keep every file you touch inside it. A private per-agent dir is collision-free — no sibling can clobber your files — AND leaves the primary checkout pristine. Never redirect into a bare filename in the working dir.
 
@@ -369,15 +368,9 @@ Steps:
    \`gh issue view ${p.issue} --repo ${a.repo} --json title -q .title > \"\$D/title.md\"\`
    \`gh issue view ${p.issue} --repo ${a.repo} --json body -q .body > \"\$D/body.md\"\`
 2. Append (do not overwrite) a block to \"\$D/body.md\":
-${
-  reason === 'umbrella-scope'
-    ? `   "## Proposed umbrella scope" followed by the title + why + a checklist of the proposed sub-issues from this scope:
-${JSON.stringify(p.plan.umbrella_scope, null, 2)}
-   End with: "_To proceed: confirm or edit this scope above, then add the \\\`cw-feedback:go\\\` label. The loop will file the umbrella and hand it to cw-orchestrate._"`
-    : `   "## Open questions" followed by a numbered list of these questions, each on its own line:
+   "## Open questions" followed by a numbered list of these questions, each on its own line:
 ${JSON.stringify(p.plan.open_questions || [], null, 2)}
-   End with: "_To proceed: answer each question inline above, then add the \\\`cw-feedback:go\\\` label._"`
-}
+   End with: "_To proceed: answer each question inline above, then add the \\\`cw-feedback:go\\\` label._"
 3. GUARD before you push — detect a contaminated read instead of compounding it. Re-fetch this issue's current title (\`gh issue view ${p.issue} --repo ${a.repo} --json title -q .title\`) and confirm it equals the contents of \"\$D/title.md\". Then confirm \"\$D/body.md\" still leads with THIS issue's body — its leading content must match the body you fetched for #${p.issue} (i.e. it begins with #${p.issue}'s original Observation / body text, with ONLY your appended block added at the end and no other issue's content). If either check fails — the title differs, the body no longer matches #${p.issue}, or a foreign Observation or a duplicate appended block is present — ABORT the write: do NOT run \`gh issue edit\`, and return { issue: ${p.issue}, parked: false, reason: "<which check failed>" } where the reason names the specific guard failure (e.g. "guard-abort: title mismatch", "guard-abort: body contaminated", "guard-abort: duplicate block") rather than the park reason, so the cause is legible. Only when both checks pass, write back: \`gh issue edit ${p.issue} --repo ${a.repo} --body-file \"\$D/body.md\"\` (never hand-escape backticks or checklists).
 4. Flip labels to the parked state: \`gh issue edit ${p.issue} --repo ${a.repo} --add-label cw-feedback:needs-input --remove-label cw-feedback:triaging\` (create cw-feedback:needs-input first if missing: color D93F0B). Do NOT add cw-feedback:go — that is the operator's action.
 5. RELEASE the claim: parking hands the issue back to the operator, so delete this run's claim comment${p.plan.claim_comment_id ? ` (\`gh api -X DELETE repos/${a.repo}/issues/comments/${p.plan.claim_comment_id} 2>/dev/null || true\`)` : ' if one exists'}. Leaving it would make the next run (after the operator adds cw-feedback:go) see a stale live claim and yield.
@@ -426,14 +419,14 @@ Merged = PR MERGED (the pre-merge gate already proved blocking CI green). Post-m
 
 Return structured output: { issue, merged, pr_state, branch_gone, ci: { failing_checks, advisory_nonblocking, cancelled, pending }, cause }.`;
 
-const umbrellaPrompt = (a, p) => `You are filing a ready-to-orchestrate GitHub umbrella from an operator-APPROVED scope, using gh via Bash. Repo ${a.repo}. The operator added cw-feedback:go, so the scope below is settled — file it; do not re-ask.
+const umbrellaPrompt = (a, p) => `You are filing a ready-to-orchestrate GitHub umbrella, using gh via Bash. Repo ${a.repo}. Triage judged this feedback umbrella-sized with CLEAR INTENT — no genuine design fork remained — so the scope below is settled: file it; do not re-ask. There is no separate operator scope-approval step; an umbrella-sized issue whose intent is clear files directly (a cw-feedback:go label is NOT required, and may or may not be present).
 
-Source feedback issue: ${p.url} (#${p.issue}). Approved scope (the operator may have edited the body; if the issue body's "## Proposed umbrella scope" differs from this, the BODY wins — re-read it first):
+Source feedback issue: ${p.url} (#${p.issue}). Proposed scope:
 ${JSON.stringify(p.plan.umbrella_scope, null, 2)}
 
 Steps:
-1. Re-read the feedback body for the operator's final scope edits: \`gh issue view ${p.issue} --repo ${a.repo} --json body\`. SELF-CONTAINMENT GUARD: the umbrella and every sub-issue body must be executable by a fresh session (and by cw-orchestrate's headless sweep) from the issue text plus the COMMITTED repo alone. If the scope or the feedback body leans on an artifact a fresh session cannot open — an uncommitted brainstorm/requirements doc, a scratch path, a repo path not on \`${a.defaultBranch}\` — do NOT carry that reference forward and do NOT strengthen it (e.g. never promote a hedged "uncommitted, doesn't depend on it" note into "the doc is the planning input"). Instead inline the decisions it holds — requirement numbers and text, constraints, acceptance criteria — into the bodies, and cite nothing local. Before citing any repo path, verify it exists on \`${a.defaultBranch}\` (\`git ls-files <path>\` / \`gh api repos/${a.repo}/contents/<path>\`); if it doesn't resolve, inline instead of citing.
-2. File the umbrella issue. Body: a human "Why" (from the scope's why + the feedback), plus a dependencies section and acceptance — but NO sub-issue checklist; sub-issues are tracked as GitHub NATIVE sub-issues, linked in step 3. Mirror the cw-scope umbrella template shape. Capture the umbrella's node id (\`gh issue view <umb> --repo ${a.repo} --json id -q .id\`). Do NOT apply a milestone/roadmap-tier label (e.g. a \`milestone\` label): per cw-scope's three-tier model a milestone is a human-owned tier ABOVE the umbrella that the skills read and reconcile but never create — an umbrella is not a milestone. Then stamp the umbrella's OWN state label \`cw-umbrella:ready\` — this umbrella was born from a cw-feedback:go issue, so its scope is operator-approved and it is cleared to orchestrate. Create the label lazily/idempotently first, then apply it to the just-filed umbrella: \`gh label create cw-umbrella:ready --repo ${a.repo} --color 5319E7 --description "Umbrella cleared and waiting for orchestration; scope human-approved upstream" 2>/dev/null || true\` then \`gh issue edit <umb> --repo ${a.repo} --add-label cw-umbrella:ready\`. \`cw-umbrella:ready\` is the umbrella's own state label — a single "ready for orchestration" marker, NOT the human-owned milestone/roadmap tier ABOVE it and NOT a mirror of the native sub-issue graph. Separately, apply a repo-specific umbrella label ONLY if the repo has one dedicated specifically to umbrellas (orthogonal to \`cw-umbrella:ready\`). Never grab a tier-above or unrelated label just because it is the closest-sounding one that exists.
+1. Re-read the feedback body for context and any operator answers inline — if this issue had an earlier design fork the operator answered before adding cw-feedback:go, those answers live in the body and are part of the settled intent: \`gh issue view ${p.issue} --repo ${a.repo} --json body\`. SELF-CONTAINMENT GUARD: the umbrella and every sub-issue body must be executable by a fresh session (and by cw-orchestrate's headless sweep) from the issue text plus the COMMITTED repo alone. If the scope or the feedback body leans on an artifact a fresh session cannot open — an uncommitted brainstorm/requirements doc, a scratch path, a repo path not on \`${a.defaultBranch}\` — do NOT carry that reference forward and do NOT strengthen it (e.g. never promote a hedged "uncommitted, doesn't depend on it" note into "the doc is the planning input"). Instead inline the decisions it holds — requirement numbers and text, constraints, acceptance criteria — into the bodies, and cite nothing local. Before citing any repo path, verify it exists on \`${a.defaultBranch}\` (\`git ls-files <path>\` / \`gh api repos/${a.repo}/contents/<path>\`); if it doesn't resolve, inline instead of citing.
+2. File the umbrella issue. Body: a human "Why" (from the scope's why + the feedback), plus a dependencies section and acceptance — but NO sub-issue checklist; sub-issues are tracked as GitHub NATIVE sub-issues, linked in step 3. Mirror the cw-scope umbrella template shape. Capture the umbrella's node id (\`gh issue view <umb> --repo ${a.repo} --json id -q .id\`). Do NOT apply a milestone/roadmap-tier label (e.g. a \`milestone\` label): per cw-scope's three-tier model a milestone is a human-owned tier ABOVE the umbrella that the skills read and reconcile but never create — an umbrella is not a milestone. Then stamp the umbrella's OWN state label \`cw-umbrella:ready\` — triage scoped this umbrella from an umbrella-sized feedback issue whose intent was clear, so it is cleared to orchestrate (a cw-feedback:go label is NOT required and may be absent). Create the label lazily/idempotently first, then apply it to the just-filed umbrella: \`gh label create cw-umbrella:ready --repo ${a.repo} --color 5319E7 --description "Umbrella cleared and waiting for orchestration; scope settled upstream" 2>/dev/null || true\` then \`gh issue edit <umb> --repo ${a.repo} --add-label cw-umbrella:ready\`. \`cw-umbrella:ready\` is the umbrella's own state label — a single "ready for orchestration" marker, NOT the human-owned milestone/roadmap tier ABOVE it and NOT a mirror of the native sub-issue graph. Separately, apply a repo-specific umbrella label ONLY if the repo has one dedicated specifically to umbrellas (orthogonal to \`cw-umbrella:ready\`). Never grab a tier-above or unrelated label just because it is the closest-sounding one that exists.
 3. File each sub-issue at one-PR granularity with a body the cw-orchestrate readiness sweep can route "ready" (self-contained per step 1's guard — every decision inline, no local/uncommitted citations): What this is, Constraints (from AGENTS.md/CLAUDE.md), Acceptance (incl. regression tests). Then link each sub-issue to the umbrella as a NATIVE sub-issue (no checklist) — for each, in reading order: \`gh api graphql -f query='mutation($p:ID!,$c:ID!){addSubIssue(input:{issueId:$p,subIssueId:$c}){issue{number}}}' -f p=<umbrella node id> -f c=$(gh issue view <sub> --repo ${a.repo} --json id -q .id)\`.
 4. Link back: add "Spawned from feedback #${p.issue}" to the umbrella body, and CLOSE the feedback issue with a comment "Tracked by umbrella #<n>; execution handed to cw-orchestrate." Remove its cw-feedback:triaging label, and RELEASE this run's claim${p.plan.claim_comment_id ? ` (\`gh api -X DELETE repos/${a.repo}/issues/comments/${p.plan.claim_comment_id} 2>/dev/null || true\`)` : ''} — the issue is handed off, not held.
 
@@ -519,17 +512,17 @@ const outcomes = await pipeline(
       label: `plan:${it.issue}`,
       phase: 'Plan',
       schema: PLAN_SCHEMA,
-    }).then((plan) => (plan ? { issue: it.issue, url: it.url, hasGo: it.has_go, plan } : null)),
+    }).then((plan) => (plan ? { issue: it.issue, url: it.url, plan } : null)),
   // Stage 2 — resolve by disposition, without waiting on sibling plans.
   async (p) => {
     if (!p) return null;
-    const disposition = dispositionFor(p.plan, p.hasGo);
+    const disposition = dispositionFor(p.plan);
 
     // Yielded: another run owns the issue — do nothing with it.
     if (disposition === 'skip') return { ...p, disposition };
 
     if (disposition === 'park') {
-      const park = await agent(parkPrompt(cfg, p, parkReason(p.plan, p.hasGo)), {
+      const park = await agent(parkPrompt(cfg, p), {
         label: `park:${p.issue}`,
         phase: 'Resolve',
         schema: PARK_SCHEMA,
@@ -538,6 +531,14 @@ const outcomes = await pipeline(
     }
 
     if (disposition === 'umbrella') {
+      // Dry triage (build:false) stays fully dry: report the umbrella disposition but
+      // file nothing and launch no orchestrate — the operator's "look before you trust
+      // the routing" escape hatch. Filing an umbrella now needs no cw-feedback:go, so
+      // without this gate a dry run would auto-file an un-reviewed umbrella.
+      if (!runBuild) {
+        log(`Planned umbrella for feedback #${p.issue} (dry triage — not filed).`);
+        return { ...p, disposition };
+      }
       const umbrella = await agent(umbrellaPrompt(cfg, p), {
         label: `umbrella:${p.issue}`,
         phase: 'Resolve',
@@ -590,10 +591,10 @@ const outcomes = await pipeline(
 // Collect the streamed outcomes for the report. Merge/build order is now
 // completion-driven, so sort the report rows by issue for a stable, legible view.
 const resolved = outcomes.filter(Boolean);
-const planned = resolved.map((r) => ({ issue: r.issue, url: r.url, hasGo: r.hasGo, plan: r.plan }));
+const planned = resolved.map((r) => ({ issue: r.issue, url: r.url, plan: r.plan }));
 const queues = actionQueues(planned);
 const yielded = planned
-  .filter((p) => dispositionFor(p.plan, p.hasGo) === 'skip')
+  .filter((p) => dispositionFor(p.plan) === 'skip')
   .map((p) => p.issue)
   .sort((a, b) => a - b);
 const umbrellas_filed = resolved
@@ -612,7 +613,7 @@ log(
 // --- Report ----------------------------------------------------------------
 const report = {
   repo: cfg.repo,
-  planned: planned.map((p) => ({ issue: p.issue, route: p.plan.route, disposition: dispositionFor(p.plan, p.hasGo) })),
+  planned: planned.map((p) => ({ issue: p.issue, route: p.plan.route, disposition: dispositionFor(p.plan) })),
   built,
   umbrellas_filed,
   escalations: escalations(planned),

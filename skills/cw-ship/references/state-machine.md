@@ -12,13 +12,13 @@
 | `cw-feedback:triaging` | A run holds this issue (paired with a `<!-- cw-ship/claim -->` comment that records the owner). Not a lock — it marks the issue as claimed; ownership and crash-recovery are resolved by the claim, see the claim contract below. | the loop, while in flight |
 | `cw-feedback:needs-input` | Parked: open questions are written into the body; waiting on the operator. | the loop |
 | `cw-feedback:go` | The operator answered the open questions and cleared this to proceed fully autonomously. | **the operator** |
-| `cw-umbrella:ready` | Umbrella cleared and waiting for orchestration; scope already human-approved upstream. The umbrella's own state label — distinct from any human-owned milestone/roadmap tier ABOVE it. | cw-ship or cw-scope (whichever files the umbrella) |
+| `cw-umbrella:ready` | Umbrella cleared and waiting for orchestration; scope settled upstream (human-approved via cw-scope, or judged umbrella-sized-with-clear-intent by cw-ship's triage). The umbrella's own state label — distinct from any human-owned milestone/roadmap tier ABOVE it. | cw-ship or cw-scope (whichever files the umbrella) |
 | `cw-umbrella:needs-input` | Umbrella cleared to orchestrate, but its only remaining open work is **parked** sub-issues (each `cw-status:stalled`) that a headless run cannot advance without a human. Swapped in **place of** `cw-umbrella:ready` (never both) so repo-scan mode stops re-picking it every tick and the label conveys "blocked on human input". | cw-orchestrate (terminal reconciliation) |
 
 Colors (created idempotently by whichever skill runs first):
 `cw-feedback` 0E8A16 · `cw-feedback:new` FBCA04 · `cw-feedback:hold` C5DEF5 · `cw-feedback:triaging` 1D76DB · `cw-feedback:needs-input` D93F0B · `cw-feedback:go` 0E8A16 · `cw-umbrella:ready` 5319E7 · `cw-umbrella:needs-input` D93F0B (the shared needs-input color).
 
-`cw-umbrella:ready` is the single authoritative "ready for orchestration" marker for an umbrella. It is **NOT a mirror or projection of the native sub-issue graph** (no-duplicated-state) — the sub-issues remain the single source of truth for what work exists; the label only asserts "this umbrella's scope was human-approved and it is cleared to orchestrate." It is a **cross-cutting** label — produced by cw-ship or cw-scope and consumed read-only by cw-orchestrate — and is **NOT part of the cw-feedback state machine this document describes**; it is documented here only because cw-ship is one of its producers.
+`cw-umbrella:ready` is the single authoritative "ready for orchestration" marker for an umbrella. It is **NOT a mirror or projection of the native sub-issue graph** (no-duplicated-state) — the sub-issues remain the single source of truth for what work exists; the label only asserts "this umbrella's scope was settled upstream (human-approved in cw-scope, or judged umbrella-sized-with-clear-intent by cw-ship's triage) and it is cleared to orchestrate." It is a **cross-cutting** label — produced by cw-ship or cw-scope and consumed read-only by cw-orchestrate — and is **NOT part of the cw-feedback state machine this document describes**; it is documented here only because cw-ship is one of its producers.
 
 `cw-umbrella:ready` and `cw-umbrella:needs-input` are **mutually exclusive lifecycle states** of the same umbrella marker, never a mirror of the sub-issue graph (no-duplicated-state still holds — both are computed from, and retired by, the umbrella's live sub-issue state, not stored as a shadow copy of it):
 
@@ -40,7 +40,7 @@ The swap is created lazily/idempotently (`gh label create cw-umbrella:needs-inpu
 
 **Lifecycle owners:**
 
-- **Stamped by** whichever producer files the umbrella — cw-ship (from a `cw-feedback:go` issue) or cw-scope (from its interactive brainstorm + decision-preflight) — created lazily/idempotently (`gh label create cw-umbrella:ready ... 2>/dev/null || true`) and added to the umbrella.
+- **Stamped by** whichever producer files the umbrella — cw-ship (when triage judges a feedback issue umbrella-sized with clear intent; no `cw-feedback:go` gate) or cw-scope (from its interactive brainstorm + decision-preflight) — created lazily/idempotently (`gh label create cw-umbrella:ready ... 2>/dev/null || true`) and added to the umbrella.
 - **Consumed read-only by cw-orchestrate** during pickup and its readiness sweep: it is the "ready for orchestration" marker and, in cw-orchestrate's repo-scan mode (`/cw-orchestrate <owner>/<repo>`), the enumeration key for discovering ready umbrellas. cw-orchestrate never mirrors or re-stamps it.
 - **Transitioned or terminally removed by cw-orchestrate**, all as terminal reconciliation steps (cw-orchestrate SKILL.md Step 7), each reading the umbrella's **live state** (never a second/mirror label), removed/added idempotently (`... 2>/dev/null || true`):
   - **Removed** once the umbrella is **fully resolved** (every sub-issue closed) or the umbrella itself is closed.
@@ -72,17 +72,18 @@ The swap is created lazily/idempotently (`gh label create cw-umbrella:needs-inpu
                │ plan
       ┌────────┼─────────────────────────┐
       │        │                          │
- no open Qs    │ open design Qs           │ umbrella-sized
- (small/med)   │ OR umbrella w/o go       │ AND cw-feedback:go present
+ no open Qs    │ a genuine design         │ umbrella-sized
+ (small/med)   │ fork remains             │ AND intent clear
       │        ▼                          ▼
       │  ┌──────────────────┐    file umbrella + sub-issues,
       │  │ feedback:needs-   │    hand off to cw-orchestrate,
       │  │ input  (body has  │    link umbrella, close feedback issue
       │  │ ## Open questions)│    as "tracked by #<umbrella>"
-      │  └────────┬──────────┘
+      │  └────────┬──────────┘    (no cw-feedback:go gate)
       │           │ operator answers inline + adds cw-feedback:go
       │           ▼
-      │     (re-enters loop on next run as a cw-feedback:go issue)
+      │     (re-enters loop on next run as a cw-feedback:go issue —
+      │      planner treats the fork as settled, routes fix or umbrella)
       ▼
   build branch → PR (Closes #issue) → shepherd → squash-merge → issue auto-closes
 ```
@@ -121,15 +122,19 @@ The merge step is no longer one-rebase-and-bail. When a PR conflicts against a f
 
 **Releasing a hold is an operator action**, parallel to the hand-flip that adds `:go`: swap `cw-feedback:hold` → `cw-feedback:new` (`gh issue edit <n> --add-label cw-feedback:new --remove-label cw-feedback:hold`), and the issue re-enters the loop on the next run as a fresh `:new`. It is **not** released through `/cw-resolve` — a held issue has no parked questions, so cw-resolve has nothing to ask. If a run is scoped directly at a held issue (`/cw-ship --only <n>`), discovery surfaces it as a legible `held` outcome ("on hold, skipped") rather than silently dropping it.
 
-## Why two parking reasons share one state
+## Parking has exactly one reason: a genuine design fork
 
-Both "I need a design decision from you" and "this is umbrella-sized — approve the proposed scope" resolve the same way: questions/scope go into the body, label flips to `cw-feedback:needs-input`, operator answers and adds `cw-feedback:go`. Keeping them one state means one habit for the operator: **read the body, answer, add `cw-feedback:go`.** The loop distinguishes them internally (the umbrella case carries a proposed scope in the body); the operator's action is identical.
+`cw-feedback:needs-input` means one thing — **the planner hit a design decision only the operator should make** (a real trade-off, an exact user-facing string, a scope boundary, a behavior choice). That is the *only* thing that stops the loop, mirroring the load-bearing principle across every cw-* skill: the blocking point is a design fork, nothing else.
+
+Being **umbrella-sized is not a parking reason.** An umbrella-sized change whose intent is clear is filed and orchestrated directly — there is no "approve the proposed scope" checkpoint. Historically this state had a second reason ("this is umbrella-sized — approve the proposed scope"), and the planner parked every umbrella for operator sign-off before filing. That sign-off was a rubber stamp — it was never denied — so it was removed: the planner now routes `umbrella` (files directly) when it can scope the work itself, and routes `needs-input` (parks) only when a genuine fork *within* that scoping remains. The two cases are distinguished at plan time by the route, not by an operator gate, and only the fork case ever reaches `cw-feedback:needs-input`.
+
+The operator's habit is unchanged for the one case that still parks: **read the body, answer, add `cw-feedback:go`.**
 
 ## The go gate (operator's only routine action)
 
 When a run parks anything, cw-ship's SKILL fires a **push notification** (`escalations` non-empty) so the operator knows input is waiting. The operator then runs **`/cw-resolve`**, which is the mechanism for the go gate: it finds every `cw-feedback:needs-input` issue and, per issue:
 
-1. Reads the `## Open questions` (or `## Proposed umbrella scope`) block.
+1. Reads the `## Open questions` block.
 2. Asks the operator each question via `AskUserQuestion`, recommended answer first.
 3. Writes the answers inline into the body and swaps `cw-feedback:needs-input` → `cw-feedback:go`.
 

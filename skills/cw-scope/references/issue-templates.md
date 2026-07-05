@@ -159,7 +159,7 @@ GitHub issue numbers don't exist until creation, so create then backfill cross-r
    # interactive brainstorm + decision-preflight, so it is cleared to orchestrate.
    # Create the label lazily/idempotently, then apply it.
    gh label create cw-umbrella:ready --color 5319E7 \
-     --description "Umbrella cleared and waiting for orchestration; scope human-approved upstream" 2>/dev/null || true
+     --description "Umbrella cleared and waiting for orchestration; scope settled upstream" 2>/dev/null || true
    gh issue edit "$UMB" --add-label cw-umbrella:ready
    ```
    Stamping `cw-umbrella:ready` marks the umbrella as cleared for orchestration — it is the umbrella's **own state label**, a single authoritative "ready" marker consumed read-only by cw-orchestrate, **not** a mirror of the native sub-issue graph. It is distinct from the human-owned milestone/roadmap tier *above* the umbrella. The separate `[--label <label>]` on the create is optional and applies **only** if the repo has a label dedicated specifically to umbrellas (orthogonal to `cw-umbrella:ready`). Do **not** apply a milestone/roadmap-tier label (e.g. a `milestone` label) — per the three-tier model above a milestone is a human-owned tier *above* the umbrella that these skills read and reconcile but never create. If no umbrella-specific label exists, that is fine; the native sub-issues identify the umbrella structurally and `cw-umbrella:ready` carries its state.
