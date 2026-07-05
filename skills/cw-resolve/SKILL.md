@@ -1,6 +1,6 @@
 ---
 name: cw-resolve
-description: Resolve the parked decisions the autonomous loops couldn't make alone — /cw-ship feedback (cw-feedback:needs-input), /cw-sweep cw-review-residuals (cw-review-residual:needs-input), and /cw-orchestrate stalled sub-issue parks (cw-status:stalled). Find every parked issue, walk you through its open questions, proposed umbrella scope, decisions, or stalled forks one at a time with the recommended answer pre-filled, write your answers back into the issue body, and release it (flip to the matching :go label, or remove cw-status:stalled) so the next loop run executes it autonomously. Trigger when the user wants to answer, clear, or review parked questions or decisions.
+description: Resolve the parked decisions the autonomous loops couldn't make alone — /cw-ship feedback (cw-feedback:needs-input), /cw-sweep cw-review-residuals (cw-review-residual:needs-input), and /cw-orchestrate stalled sub-issue parks (cw-status:stalled). Find every parked issue, walk you through its open questions, decisions, or stalled forks one at a time with the recommended answer pre-filled, write your answers back into the issue body, and release it (flip to the matching :go label, or remove cw-status:stalled) so the next loop run executes it autonomously. Trigger when the user wants to answer, clear, or review parked questions or decisions.
 metadata:
   version: "0.1.0"
   triggers:
@@ -15,7 +15,7 @@ metadata:
 
 Answer the decisions that the autonomous loops parked for you. This is the operator's one routine inbox, and the only skill whose whole job is to take your input. It drains **three** parked queues with the identical recommendation-first flow:
 
-- **Feedback** that `cw-ship` parked (`cw-feedback:needs-input`) — design forks and umbrella-scope approvals.
+- **Feedback** that `cw-ship` parked (`cw-feedback:needs-input`) — genuine design forks the planner couldn't settle alone. (Being umbrella-sized is no longer parked for approval: an umbrella-sized change with clear intent is filed and orchestrated by cw-ship directly, so the only feedback parks that reach here are real design decisions.)
 - **Review-residuals** that `cw-sweep` parked (`cw-review-residual:needs-input`) — judgment calls on shipped code that the residual triage couldn't auto-resolve.
 - **Stalled sub-issue parks** that `cw-orchestrate`'s headless repo-scan parked (`cw-status:stalled`) — a sub-issue whose design fork the scan couldn't settle, which blocked its umbrella (swapped `cw-umbrella:ready` → `cw-umbrella:needs-input`). Answering here records the resolution on the sub-issue body and releases the park; the next `cw-orchestrate` scan auto-restores the umbrella.
 
@@ -29,7 +29,7 @@ This is the **third** skill in the feedback pipeline:
        └────────── next triage run ──────────┘
 ```
 
-When the loop hits a genuine design fork — a question your original feedback didn't settle, or an umbrella-sized change needing scope approval — it writes the question into the issue body and flips the issue to `cw-feedback:needs-input` (the full contract is in [cw-ship's state machine](../cw-ship/references/state-machine.md)). This skill is how you clear those: it gathers them, asks you, records your answers, and adds `cw-feedback:go`. From there the loop is autonomous to merge — you never review the resulting PR. Answering here is the one routine action the pipeline asks of you.
+When the loop hits a genuine design fork — a question your original feedback didn't settle — it writes the question into the issue body and flips the issue to `cw-feedback:needs-input` (the full contract is in [cw-ship's state machine](../cw-ship/references/state-machine.md)). This skill is how you clear those: it gathers them, asks you, records your answers, and adds `cw-feedback:go`. From there the loop is autonomous to merge — you never review the resulting PR. Answering here is the one routine action the pipeline asks of you.
 
 ## When to Use
 
@@ -66,8 +66,7 @@ If all are empty, say so plainly ("inbox empty — nothing parked") and stop. Ot
 
 Each parked issue carries exactly one of:
 
-- **`## Open questions`** (feedback) — a numbered list of design forks, each often with a recommended answer the planner suggested.
-- **`## Proposed umbrella scope`** (feedback) — a title + why + a checklist of proposed sub-issues, for an umbrella-sized change awaiting your approval.
+- **`## Open questions`** (feedback) — a numbered list of design forks, each often with a recommended answer the planner suggested. (This is the only shape a parked feedback issue takes; umbrella-sized changes are filed by cw-ship directly and never parked for scope approval.)
 - **`## Decision needed`** (cw-review-residual) — a numbered list of judgment calls from residual triage, each with the question, a recommended answer, and the alternatives.
 - **A `<!-- cw:status -->` marker comment** (stalled sub-issue) — **not** a body block. cw-orchestrate's headless scan upserts one comment on the sub-issue formatted `⏸ needs-input: <the unresolved fork>, parked for /cw-resolve` (see [cw-orchestrate Step 3b](../cw-orchestrate/SKILL.md)). The text after `needs-input:` is the fork to settle. Fetch it with `gh issue view <n> --repo <repo> --json comments -q '.comments[].body' | grep 'cw:status'` (or read the comments and find the one marker).
 
@@ -76,8 +75,6 @@ Read the whole body for context (for feedback: the Observation / What I want cha
 ### Step 3: Ask, with the recommendation pre-filled
 
 For **open questions**, ask each via `AskUserQuestion`, one question per turn. Lead with the planner's recommended answer as the first option marked "(Recommended)", then realistic alternatives, so the common case is a single tap. Frame options as outcomes, not implementation minutiae. Keep your own recommendation honest — if the planner didn't suggest one and you have a defensible view, offer it; if it's a genuine toss-up, say so.
-
-For a **proposed umbrella scope**, present the title + sub-issue list and ask: approve as-is (Recommended if it's sound) / edit the scope / not an umbrella — do it as a single PR instead / skip for now. If they choose edit, capture the edits (add/remove/retitle sub-issues) via follow-up questions or free text.
 
 For a **`## Decision needed`** (cw-review-residual), ask each decision the same way: the `decision_question` as the prompt, the recommended answer first ("(Recommended)"), then the alternatives. These are choices on already-shipped code, so frame them as outcomes ("show the banner once per session" vs "on every run"), not as code changes.
 
@@ -97,7 +94,6 @@ gh issue edit <n> --repo <repo> --body-file "$D/body.md"
 ```
 
 - **Open questions / Decision needed:** under each question or decision, add an `**Answer:** <decision>` line (and a one-line rationale if it matters for edge cases). Leave the questions visible so the trail is auditable.
-- **Umbrella scope:** mark it `**Approved**` (or write the edited scope, or note "Resolved as single PR — not an umbrella" if they downgraded it).
 - **Stalled sub-issue:** write the answer into the **sub-issue's own body** (its single source of truth — never mirror it onto the umbrella) by appending a `## Resolved fork` block that names the fork and the decision using the same `**Answer:**` convention, e.g.:
 
   ```markdown

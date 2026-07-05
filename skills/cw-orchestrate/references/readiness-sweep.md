@@ -8,14 +8,14 @@ Scope is resolved before routing: if the invocation used `--only` / `--except` (
 
 ## Two gate postures
 
-cw-orchestrate has two entry paths, and they place the single human approval at **different points** — but neither ever plans against an unresolved fork.
+cw-orchestrate has two entry paths, and they place the single clearance gate at **different points** — but neither ever plans against an unresolved fork. (That clearance is a human approval for cw-scope umbrellas and the interactive number-mode sweep; for a cw-ship umbrella it is the autonomous triage judgment the `cw-umbrella:ready` label encodes — a genuine fork parks upstream rather than producing an umbrella.)
 
 | Entry | Human gate | Sweep? |
 |-------|-----------|--------|
 | **Number mode** (`/cw-orchestrate <umbrella>`) | **At the sweep** — the interactive readiness sweep below is the single human touchpoint. | Yes, full interactive sweep. |
-| **Repo-scan mode** (`/cw-orchestrate <owner>/<repo>`) | **Upstream, at label-stamp time** — the `cw-umbrella:ready` label already encodes a human approval (added at `cw-feedback:go` for cw-ship umbrellas, or at interactive scoping for cw-scope umbrellas). | **No.** It runs headless and cannot solicit a human. |
+| **Repo-scan mode** (`/cw-orchestrate <owner>/<repo>`) | **Upstream, at label-stamp time** — the `cw-umbrella:ready` label already encodes upstream clearance (cw-scope: interactive human scoping; cw-ship: an autonomous triage judgment that the feedback was umbrella-sized with clear intent and no unsettled design fork — a genuine fork would have parked as `cw-feedback:needs-input` instead of producing an umbrella). | **No.** It runs headless and cannot solicit a human. |
 
-Repo-scan mode runs **no interactive sweep**: it trusts the upstream approval the label encodes. But it still performs the sweep's *routing judgment* — headlessly (SKILL.md, Repo-scan mode / Step 3b). Per open sub-issue it classifies readiness with the same criteria as the routing table below:
+Repo-scan mode runs **no interactive sweep**: it trusts the upstream clearance the label encodes. But it still performs the sweep's *routing judgment* — headlessly (SKILL.md, Repo-scan mode / Step 3b). Per open sub-issue it classifies readiness with the same criteria as the routing table below:
 
 - A sub-issue that would route to **ready** gets a `route: ready` brief derived non-interactively from its issue body and enters the manifest.
 - A sub-issue whose body carries a **recorded-answer block** (a `## Resolved fork` `**Answer:**` block written by `/cw-resolve` when it drained this sub-issue's stalled park) routes **ready**: the fork that stalled it is resolved, so derive the brief from the body **plus the recorded answer** rather than re-classifying the settled fork as fresh and re-parking it. This is what makes a `/cw-resolve` release stick — without it, the restored umbrella would re-park the same fork on the very next scan.

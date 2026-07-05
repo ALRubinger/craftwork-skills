@@ -45,7 +45,7 @@ done
 # claude -p "/cw-orchestrate $REPO"
 ```
 
-The optional trailing step wires cw-ship's output straight into cw-orchestrate's **repo-scan mode**. `/cw-orchestrate <owner>/<repo>` (a slug, not a `#number`) discovers **every** OPEN issue carrying `cw-umbrella:ready` — including the ones this very run just filed — and runs each through the hands-off plan → review → work → serial-merge flow **with no interactive sweep** (the label is the upstream human approval; see cw-orchestrate's [readiness-sweep.md](../../cw-orchestrate/references/readiness-sweep.md#two-gate-postures)). It is **opt-in**, same posture as everything else in this file: leave it commented for on-demand-only, uncomment to have the scheduled cw-ship tick also drain ready umbrellas.
+The optional trailing step wires cw-ship's output straight into cw-orchestrate's **repo-scan mode**. `/cw-orchestrate <owner>/<repo>` (a slug, not a `#number`) discovers **every** OPEN issue carrying `cw-umbrella:ready` — including the ones this very run just filed — and runs each through the hands-off plan → review → work → serial-merge flow **with no interactive sweep** (the label is the upstream clearance — for a cw-ship umbrella that is the triage judgment that filed it, with no separate human approval; see cw-orchestrate's [readiness-sweep.md](../../cw-orchestrate/references/readiness-sweep.md#two-gate-postures)). It is **opt-in**, same posture as everything else in this file: leave it commented for on-demand-only, uncomment to have the scheduled cw-ship tick also drain ready umbrellas.
 
 Why it is safe to fire on every tick:
 
