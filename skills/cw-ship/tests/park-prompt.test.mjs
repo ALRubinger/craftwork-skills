@@ -43,6 +43,51 @@ function extractParkPrompt(src) {
 
 const parkPromptSrc = extractParkPrompt(workflowSrc);
 
+// Compile the extracted builder into a callable so we can EVALUATE it, not just
+// string-match it. The static assertions below never expand the template, so a
+// bare `${reason}` interpolation referencing an out-of-scope identifier throws
+// only at render time — which is exactly the ReferenceError ("reason is not
+// defined") that crashed a real park run. `parkReason` is the one module-scoped
+// helper the builder closes over; inject it so the arrow resolves. `JSON` is a
+// global and needs nothing.
+function compileParkPrompt(src) {
+  const arrow = src.replace(/^const parkPrompt =\s*/, '').replace(/;\s*$/, '');
+  // eslint-disable-next-line no-new-func
+  return new Function('parkReason', `return (${arrow});`)(
+    (plan) => (plan && plan.route === 'needs-input' ? 'open-questions' : null),
+  );
+}
+
+test('parkPrompt RENDERS without throwing — no out-of-scope interpolation', () => {
+  // Regression for the `${reason}` crash: parkPrompt referenced an undefined
+  // `reason` (the value is `parkReason(p.plan)`), so the whole park pipeline died
+  // with "reason is not defined" the moment an issue routed needs-input, leaving
+  // it stranded in cw-feedback:triaging with the questions never written back.
+  const parkPrompt = compileParkPrompt(parkPromptSrc);
+  const a = { repo: 'owner/repo', defaultBranch: 'main' };
+  const p = {
+    issue: 2014,
+    url: 'https://github.com/owner/repo/issues/2014',
+    plan: {
+      route: 'needs-input',
+      claim_comment_id: 12345,
+      open_questions: ['Verify by diff_ids or attest the pushed serialization?'],
+    },
+  };
+  let rendered;
+  assert.doesNotThrow(() => {
+    rendered = parkPrompt(a, p);
+  }, 'parkPrompt must render without a ReferenceError for any interpolated identifier');
+  // The rendered structured-output line must carry the resolved park reason, not
+  // a literal `${reason}` or an empty value.
+  assert.match(
+    rendered,
+    /reason:\s*"open-questions"/,
+    'the returned structured-output contract must interpolate the resolved parkReason',
+  );
+  assert.doesNotMatch(rendered, /\$\{reason\}/, 'no unresolved ${reason} may survive rendering');
+});
+
 test('parkPrompt creates a private temp dir for all scratch', () => {
   // mktemp -d gives each concurrent subagent its own directory, so it can use
   // fixed filenames inside it without colliding and without touching the checkout.

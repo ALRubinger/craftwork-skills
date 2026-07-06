@@ -375,7 +375,7 @@ ${JSON.stringify(p.plan.open_questions || [], null, 2)}
 4. Flip labels to the parked state: \`gh issue edit ${p.issue} --repo ${a.repo} --add-label cw-feedback:needs-input --remove-label cw-feedback:triaging\` (create cw-feedback:needs-input first if missing: color D93F0B). Do NOT add cw-feedback:go — that is the operator's action.
 5. RELEASE the claim: parking hands the issue back to the operator, so delete this run's claim comment${p.plan.claim_comment_id ? ` (\`gh api -X DELETE repos/${a.repo}/issues/comments/${p.plan.claim_comment_id} 2>/dev/null || true\`)` : ' if one exists'}. Leaving it would make the next run (after the operator adds cw-feedback:go) see a stale live claim and yield.
 
-Return structured output: { issue: ${p.issue}, parked: true, reason: "${reason}" } once the body is written, labels flipped, and the claim released (or parked: false with the mismatch cause if the guard aborted the write — in that case do NOT release the claim, the issue stays held).`;
+Return structured output: { issue: ${p.issue}, parked: true, reason: "${parkReason(p.plan)}" } once the body is written, labels flipped, and the claim released (or parked: false with the mismatch cause if the guard aborted the write — in that case do NOT release the claim, the issue stays held).`;
 
 const buildPrompt = (a, p) => `You are implementing ONE feedback change end-to-end in an isolated git worktree, headless, with no human. Do NOT merge; the orchestrator merges serially after you return.
 
