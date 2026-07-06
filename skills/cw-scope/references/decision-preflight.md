@@ -27,7 +27,7 @@ When unsure whether a fork is plan-blocking, ask: *if two competent planners res
 
 ## How to resolve
 
-- One question per turn, via the platform blocking-question tool (`AskUserQuestion`).
+- One question per turn, via the harness's blocking-question UI when available, or direct chat otherwise.
 - Lead with a **recommended** option when you have a defensible one (mark it "(Recommended)"), then the alternatives. The user can always redirect.
 - Frame options as **mechanism / outcome** distinctions, not implementation minutiae — the user is deciding product/scope shape, not writing code.
 - Capture the answer **and the rationale** in the sub-issue's Resolved decisions section. The rationale lets a planner handle edge cases the decision didn't literally cover.
@@ -49,7 +49,7 @@ Before a sub-issue is done, read its body as if you were the context-free headle
 - An unstated default → decide it (or record it as an explicitly accepted gap).
 - An undecided boundary → resolve it with the user.
 - An ambiguous term → define it, mapping to repo `CONCEPTS.md` vocabulary if present.
-- A missing constraint → pull it from `CLAUDE.md` / `AGENTS.md` into the Constraints section.
+- A missing constraint → pull it from the repo instruction files (`AGENTS.md`, `CLAUDE.md`, etc.) into the Constraints section.
 - "The existing pattern" with no file named → name the file in Pointers.
 
 A sub-issue passes when it carries no silent assumption — every gap is either closed or explicitly accepted. That is the same gate orchestrate's sweep runs; running it here, with the user present, is what lets the sweep route the issue `ready`.

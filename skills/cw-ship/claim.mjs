@@ -5,7 +5,7 @@
 // may build an issue only if it owns the issue's claim. A claim is a GitHub
 // comment carrying the marker `<!-- cw-ship/claim -->`; GitHub assigns it an
 // immutable `id` and `created_at`, which are the claim's identity and tiebreak.
-// Nothing here depends on a shell PID or a process being alive — the Claude Code
+// Nothing here depends on a shell PID or a process being alive — some agent
 // harness runs every Bash call in a fresh ephemeral shell, so process-liveness is
 // meaningless and the old `$$`-in-a-lockfile scheme was unsound by construction.
 //

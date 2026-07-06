@@ -564,7 +564,7 @@ Return structured output: { residual_issue, sub_issue, shipped, closed, findings
 // (mirror.test.mjs renders both and asserts equality). They drive the in-run PARK
 // step: the headless analog of the autofix sweep. After triage, each
 // parkCandidates() residual gets a "## Decision needed" block written into its body
-// + the cw-review-residual:needs-input label, so a standalone /cw-resolve (which
+// + the cw-review-residual:needs-input label, so a standalone cw-resolve skill run (which
 // queries --label cw-review-residual:needs-input) can discover and drain it.
 const decisionFindings = (tr) =>
   ((tr && tr.findings) || []).filter(
@@ -575,7 +575,7 @@ const parkResidualPrompt = (m, tr, residualUrl) => `You are PARKING one cw-revie
 
 Steps:
 1. Fetch the current body into a private temp dir (write all scratch here, never into the working checkout): \`D=\"\$(mktemp -d)\"; gh issue view ${tr.residual_issue} --repo ${m.repo} --json body -q .body > \"\$D/body.md\"\`.
-2. Write the decisions into \"\$D/body.md\" as a "## Decision needed" block — one numbered entry per decision below, each showing the question, your recommended answer, and the alternatives. Each entry MUST carry an "**Answer:** " line (left blank for the operator to fill) so /cw-resolve can parse and write the answer back. If a "## Decision needed" block already exists (a prior park), REPLACE it in place rather than appending a second one. The decisions:
+2. Write the decisions into \"\$D/body.md\" as a "## Decision needed" block — one numbered entry per decision below, each showing the question, your recommended answer, and the alternatives. Each entry MUST carry an "**Answer:** " line (left blank for the operator to fill) so the cw-resolve skill can parse and write the answer back. If a "## Decision needed" block already exists (a prior park), REPLACE it in place rather than appending a second one. The decisions:
 \`\`\`json
 ${JSON.stringify(
   decisionFindings(tr).map((f) => ({
@@ -587,7 +587,7 @@ ${JSON.stringify(
   2,
 )}
 \`\`\`
-   End the block with: "_To proceed: answer each decision inline above, then add the \\\`cw-review-residual:go\\\` label (or run /cw-resolve). The next cw-sweep run applies your answers._"
+   End the block with: "_To proceed: answer each decision inline above, then add the \\\`cw-review-residual:go\\\` label (or invoke the cw-resolve skill). The next cw-sweep run applies your answers._"
    Use \`gh issue edit ${tr.residual_issue} --repo ${m.repo} --body-file \"\$D/body.md\"\` (never hand-escape backticks or checklists).
 3. Flip labels to the parked state: \`gh issue edit ${tr.residual_issue} --repo ${m.repo} --add-label cw-review-residual:needs-input --remove-label cw-review-residual:go\` (create cw-review-residual:needs-input first if missing: color D93F0B). Do NOT add cw-review-residual:go — that is the operator's action.
 
@@ -936,8 +936,8 @@ for (const residualIssue of autofixQueue) {
 // ---------------------------------------------------------------------------
 // Park decisions: write the "## Decision needed" block + needs-input label.
 // The headless analog of autofix — each shipped residual with a remaining judgment
-// call (DECISION or low-confidence FIX_NOW) is parked to the /cw-resolve inbox so a
-// standalone /cw-resolve (querying --label cw-review-residual:needs-input) can drain
+// call (DECISION or low-confidence FIX_NOW) is parked to the cw-resolve inbox so a
+// standalone cw-resolve skill run (querying --label cw-review-residual:needs-input) can drain
 // it. Escalations stay in the report too (this is the durable park, not a
 // replacement). Unshipped residuals defer (deferredResiduals), never park. Runs
 // after autofix: a residual carrying a parkable finding is keep-open, so its autofix

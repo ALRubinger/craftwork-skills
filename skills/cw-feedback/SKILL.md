@@ -1,6 +1,6 @@
 ---
 name: cw-feedback
-description: Capture plain-English dogfooding feedback about the product you're building while you're using it, enrich it lightly (classify, grab repo + command context, one clarifying question only if truly ambiguous), and file ONE GitHub issue labeled cw-feedback:new that /cw-ship's scheduled loop later turns into a merged change. Trigger when the user wants to record an observation, gripe, or change request about the product they're building ("I don't like X", "feedback:", "log this", "file feedback", "Y should change").
+description: Capture plain-English dogfooding feedback about the product you're building while you're using it, enrich it lightly (classify, grab repo + command context, one clarifying question only if truly ambiguous), and file ONE GitHub issue labeled cw-feedback:new that the cw-ship skill's scheduled loop later turns into a merged change. Trigger when the user wants to record an observation, gripe, or change request about the product they're building ("I don't like X", "feedback:", "log this", "file feedback", "Y should change").
 metadata:
   version: "0.1.0"
   triggers:
@@ -48,7 +48,7 @@ The user's words describe *what they want changed*. Treat them as a description 
 
 Gather, without prompting the user:
 
-- **Repo** — `git -C . remote get-url origin` → `owner/name`. This is where the issue is filed. If the cwd isn't the intended repo, ask which repo the feedback targets (`AskUserQuestion`; load via `ToolSearch` `select:AskUserQuestion`).
+- **Repo** — `git -C . remote get-url origin` → `owner/name`. This is where the issue is filed. If the cwd isn't the intended repo, ask which repo the feedback targets using the harness's blocking-question UI, or direct chat if no structured question UI exists.
 - **Surface** — what product surface the feedback is about, if inferable from the user's words or recent commands (e.g. a CLI command, the web app, an API endpoint, the docs site). Don't guess wildly; record only what's grounded.
 - **Repro / where seen** — if the user named a command, page, or flow, capture it verbatim.
 
@@ -65,7 +65,7 @@ Assign exactly one **kind** (drives nothing mechanical, but orients the triage p
 
 ### Step 4: Enrich — at most one clarifying question
 
-Read the feedback for the **one** ambiguity that would most change what gets built, and only if it's genuinely blocking, ask it (`AskUserQuestion`, recommended option first). Examples of blocking ambiguity worth a question: "change X" where X names two different things; "make it faster" with no sense of which operation. Do **not** interrogate — capture is meant to be a few seconds of the user's time. If nothing is genuinely blocking, ask nothing.
+Read the feedback for the **one** ambiguity that would most change what gets built, and only if it's genuinely blocking, ask it with the recommended option first. Use the harness's structured question UI when available; otherwise ask directly in chat. Examples of blocking ambiguity worth a question: "change X" where X names two different things; "make it faster" with no sense of which operation. Do **not** interrogate — capture is meant to be a few seconds of the user's time. If nothing is genuinely blocking, ask nothing.
 
 You are recording intent for a planner to research, not preflighting every decision. The triage loop's preflight is where deep design questions surface (and get synced back to you via the issue body). Resist front-loading them here.
 
@@ -112,7 +112,7 @@ gh issue create --repo <repo> \
   --body-file "$D/body.md"
 ```
 
-Report back the issue URL and a one-line summary of what you captured, and tell the user it'll be picked up on the next `/cw-ship` loop. That's the whole job — do not start working the issue.
+Report back the issue URL and a one-line summary of what you captured, and tell the user it'll be picked up on the next `cw-ship` loop. That's the whole job — do not start working the issue.
 
 #### Filing (or marking) feedback on hold
 
@@ -135,7 +135,7 @@ To **flag an already-filed issue** on hold after the fact, hand-swap its entry l
 gh issue edit <n> --repo <repo> --add-label cw-feedback:hold --remove-label cw-feedback:new
 ```
 
-**Releasing a hold** is a deliberate operator action: swap the label back to `:new` (`gh issue edit <n> --add-label cw-feedback:new --remove-label cw-feedback:hold`), parallel to the hand-flip that adds `cw-feedback:go`. It is *not* released through `/cw-resolve` — a held issue has no parked questions to answer.
+**Releasing a hold** is a deliberate operator action: swap the label back to `:new` (`gh issue edit <n> --add-label cw-feedback:new --remove-label cw-feedback:hold`), parallel to the hand-flip that adds `cw-feedback:go`. It is *not* released through the `cw-resolve` skill — a held issue has no parked questions to answer.
 
 ## Key Notes
 
@@ -145,4 +145,4 @@ gh issue edit <n> --repo <repo> --add-label cw-feedback:hold --remove-label cw-f
 - **Cheap by design.** No planning, no scoping, no PR. If you find yourself asking more than one question, stop — that depth belongs in the triage loop's preflight, which syncs back through the issue body.
 - **`gh`/`git` via Bash**, not MCP — matches the downstream headless loop.
 - **The label is the contract.** `cw-feedback:new` is what the loop's discovery query looks for. Don't file with a different label and expect pickup.
-- **Hold parks it in the backlog, not the loop.** `cw-feedback:hold` is the entry-label swap for "catalog it but don't ship yet" — it is mutually exclusive with every other state label and is excluded from discovery. Release it by hand-swapping back to `:new`; not via `/cw-resolve`.
+- **Hold parks it in the backlog, not the loop.** `cw-feedback:hold` is the entry-label swap for "catalog it but don't ship yet" — it is mutually exclusive with every other state label and is excluded from discovery. Release it by hand-swapping back to `:new`; not via the `cw-resolve` skill.

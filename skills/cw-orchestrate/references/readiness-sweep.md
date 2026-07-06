@@ -12,14 +12,14 @@ cw-orchestrate has two entry paths, and they place the single clearance gate at 
 
 | Entry | Human gate | Sweep? |
 |-------|-----------|--------|
-| **Number mode** (`/cw-orchestrate <umbrella>`) | **At the sweep** — the interactive readiness sweep below is the single human touchpoint. | Yes, full interactive sweep. |
-| **Repo-scan mode** (`/cw-orchestrate <owner>/<repo>`) | **Upstream, at label-stamp time** — the `cw-umbrella:ready` label already encodes upstream clearance (cw-scope: interactive human scoping; cw-ship: an autonomous triage judgment that the feedback was umbrella-sized with clear intent and no unsettled design fork — a genuine fork would have parked as `cw-feedback:needs-input` instead of producing an umbrella). | **No.** It runs headless and cannot solicit a human. |
+| **Number mode** (`cw-orchestrate` number mode for `<umbrella>`) | **At the sweep** — the interactive readiness sweep below is the single human touchpoint. | Yes, full interactive sweep. |
+| **Repo-scan mode** (the `cw-orchestrate` repo-scan mode for `<owner>/<repo>`) | **Upstream, at label-stamp time** — the `cw-umbrella:ready` label already encodes upstream clearance (cw-scope: interactive human scoping; cw-ship: an autonomous triage judgment that the feedback was umbrella-sized with clear intent and no unsettled design fork — a genuine fork would have parked as `cw-feedback:needs-input` instead of producing an umbrella). | **No.** It runs headless and cannot solicit a human. |
 
 Repo-scan mode runs **no interactive sweep**: it trusts the upstream clearance the label encodes. But it still performs the sweep's *routing judgment* — headlessly (SKILL.md, Repo-scan mode / Step 3b). Per open sub-issue it classifies readiness with the same criteria as the routing table below:
 
 - A sub-issue that would route to **ready** gets a `route: ready` brief derived non-interactively from its issue body and enters the manifest.
-- A sub-issue whose body carries a **recorded-answer block** (a `## Resolved fork` `**Answer:**` block written by `/cw-resolve` when it drained this sub-issue's stalled park) routes **ready**: the fork that stalled it is resolved, so derive the brief from the body **plus the recorded answer** rather than re-classifying the settled fork as fresh and re-parking it. This is what makes a `/cw-resolve` release stick — without it, the restored umbrella would re-park the same fork on the very next scan.
-- A sub-issue that would route to **clarify-now** or **back-off-to-brainstorm** — an unresolved design fork a human would have to settle, and with no recorded-answer block resolving it — is **parked** (`cw-status:stalled` + a `needs-input` reason comment) and **excluded from the manifest**. It is never planned; `/cw-resolve` drains that park (records the answer on the sub-issue body, removes `cw-status:stalled`), after which a subsequent scan sees the recorded answer, restores the umbrella, and routes the sub-issue ready.
+- A sub-issue whose body carries a **recorded-answer block** (a `## Resolved fork` `**Answer:**` block written by the `cw-resolve` skill when it drained this sub-issue's stalled park) routes **ready**: the fork that stalled it is resolved, so derive the brief from the body **plus the recorded answer** rather than re-classifying the settled fork as fresh and re-parking it. This is what makes a `cw-resolve` release stick — without it, the restored umbrella would re-park the same fork on the very next scan.
+- A sub-issue that would route to **clarify-now** or **back-off-to-brainstorm** — an unresolved design fork a human would have to settle, and with no recorded-answer block resolving it — is **parked** (`cw-status:stalled` + a `needs-input` reason comment) and **excluded from the manifest**. It is never planned; the `cw-resolve` skill drains that park (records the answer on the sub-issue body, removes `cw-status:stalled`), after which a subsequent scan sees the recorded answer, restores the umbrella, and routes the sub-issue ready.
 
 So the invariant "no brief proceeds carrying an unstated assumption / unresolved fork" holds on **both** paths: number mode closes the gap interactively with the operator present; repo mode parks the gap and excludes the sub-issue rather than guessing. The headless Workflow only ever receives `route: ready` briefs.
 
@@ -29,7 +29,7 @@ For each open sub-issue, in enumeration order:
 
 1. **Read the issue and scan the repo.** Read the issue body and comments. Grep the repo for the surfaces it names (files, commands, endpoints, types). Identify the decisions a plan would need: scope ambiguities, unstated user-facing behavior, design forks, naming, error/edge handling the issue leaves open.
 
-2. **Surface decisions interactively, one question at a time.** Use the platform blocking-question tool (AskUserQuestion). Ask the *plan-blocking* questions only — the ones whose answers change what gets built. Do not ask questions a planner can reasonably decide on its own; those are noise.
+2. **Surface decisions interactively, one question at a time.** Use the harness's blocking-question UI when available, or direct chat otherwise. Ask the *plan-blocking* questions only — the ones whose answers change what gets built. Do not ask questions a planner can reasonably decide on its own; those are noise.
 
 3. **Route to one of three states:**
 

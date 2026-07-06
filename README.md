@@ -4,7 +4,7 @@
 
 CraftWork is an opinionated suite of agent skills that turns lived-experience feedback into merged pull requests, using **GitHub issues as a durable, asynchronous state machine** and engaging you only at genuine decision points. You observe, you decide, it ships — and the agent does the work in between.
 
-It is built for [Claude Code](https://claude.com/claude-code) and any agent runtime that supports the [Agent Skills](https://agentskills.io) standard.
+It is built for any agent harness that supports the [Agent Skills](https://agentskills.io) standard.
 
 ## Why it exists
 
@@ -25,7 +25,7 @@ cw-sweep        clean up leftover review notes  -> a tidy backlog
 
 Two tracks share the same philosophy:
 
-- **Everyday track** - you hit a rough edge while using the product, run `cw-feedback`, and when you're ready you invoke `/cw-ship` to turn the backlog into merged changes. If an item needs a decision, it parks the question into the issue body and pings you; you answer with `cw-resolve` and the next run finishes it on its own.
+- **Everyday track** - you hit a rough edge while using the product, run `cw-feedback`, and when you're ready you invoke the `cw-ship` skill to turn the backlog into merged changes. If an item needs a decision, it parks the question into the issue body and pings you; you answer with `cw-resolve` and the next run finishes it on its own.
 - **Initiative track** - for deliberate, multi-PR work you run `cw-scope` to shape it, then `cw-orchestrate` to drive it to done — each sub-issue squash-merging straight to `main` — with `cw-sweep` clearing the review residue.
 
 The split maps to the names: **Craft** is what you fire to capture and decide (`cw-feedback`, `cw-resolve`, `cw-scope`); **Work** is what runs hands-off to merge once you invoke it (`cw-ship`, `cw-orchestrate`, `cw-sweep`).
@@ -35,7 +35,7 @@ The split maps to the names: **Craft** is what you fire to capture and decide (`
 | Skill | Track | What it does |
 |-------|-------|--------------|
 | [`cw-feedback`](skills/cw-feedback) | everyday | Capture a plain-English observation as one GitHub issue. |
-| [`cw-ship`](skills/cw-ship) | everyday | On-demand loop you invoke (`/cw-ship`): plan each captured item against the code, build + merge the clear ones, park the rest, escalate the big ones. |
+| [`cw-ship`](skills/cw-ship) | everyday | On-demand loop you invoke (the `cw-ship` skill): plan each captured item against the code, build + merge the clear ones, park the rest, escalate the big ones. |
 | [`cw-resolve`](skills/cw-resolve) | everyday | Walk you through the design questions the loop parked, record your answers, release the work. |
 | [`cw-scope`](skills/cw-scope) | initiative | Interactively scope a large initiative into a ready set of sub-issues. |
 | [`cw-orchestrate`](skills/cw-orchestrate) | initiative | Drive a scoped initiative's sub-issues to merged PRs, hands-off. |
@@ -56,26 +56,26 @@ npx skills add ALRubinger/craftwork-skills
 npx skills add ALRubinger/craftwork-skills --skill cw-feedback --skill cw-ship
 ```
 
-Or as a Claude Code plugin marketplace:
+Or through a harness-specific plugin/marketplace flow when one is available. For example, Claude Code users can add the plugin marketplace:
 
 ```sh
 /plugin marketplace add ALRubinger/craftwork-skills
 ```
 
-If you're *developing* the suite from a clone and want `/cw-*` to run your working tree (live edits, no publish step), symlink the skills into your Claude skills dir instead:
+If you're *developing* the suite from a clone and want the `cw-*` skills to run from your working tree (live edits, no publish step), symlink the skills into your harness's skills dir instead:
 
 ```sh
-task link              # symlink every skills/* into ~/.claude/skills
-task link -- --dry-run # preview; --force replaces conflicting links
+AGENT_SKILLS_DIR=/path/to/skills task link
+AGENT_SKILLS_DIR=/path/to/skills task link -- --dry-run # preview; --force replaces conflicting links
 ```
 
-It's idempotent — re-run it after adding a skill so nothing goes stale. Use this on your authoring machine; use the marketplace on machines that only consume the suite (don't do both, or each skill loads twice).
+It's idempotent — re-run it after adding a skill so nothing goes stale. If `AGENT_SKILLS_DIR` is unset, the script uses `CODEX_SKILLS_DIR` or `CLAUDE_SKILLS_DIR` when set, then auto-detects existing `~/.codex/skills` or `~/.claude/skills`, otherwise falls back to `~/.agent-skills`. Use this on your authoring machine; use the harness's normal install/marketplace path on machines that only consume the suite (don't do both, or each skill loads twice).
 
 The Work-track skills (`cw-ship`, `cw-orchestrate`, `cw-sweep`) drive real merges via `gh`/`git` once you invoke them — `cw-ship` and `cw-orchestrate` are on-demand, and `cw-sweep` can optionally be put on a schedule. All three run hands-off to merge. Read each skill's `SKILL.md` before running it, and start with a dry run.
 
 ## Running the loops
 
-`cw-ship` is on-demand — you invoke `/cw-ship <owner>/<repo>` when you want the feedback backlog drained, and `cw-orchestrate` likewise runs when you hand it an umbrella. Neither is wired to a timer.
+`cw-ship` is on-demand — you ask your agent to use the `cw-ship` skill for `<owner>/<repo>` when you want the feedback backlog drained, and `cw-orchestrate` likewise runs when you hand it an umbrella. Neither is wired to a timer.
 
 `cw-sweep` is the one loop you may *optionally* put on a schedule, to drain the `cw-review-residual` backlog out of band; `cw-orchestrate` already triages its own residuals in-band, so it does not need one either.
 
@@ -84,7 +84,7 @@ The Work-track skills (`cw-ship`, `cw-orchestrate`, `cw-sweep`) drive real merge
 Scheduling is strictly opt-in. If you deliberately want `cw-sweep` running on a timer, the installer sets it up. From a clone of this repo:
 
 ```sh
-bash scripts/install-scheduler.sh --skill cw-sweep
+bash scripts/install-scheduler.sh --skill cw-sweep --agent-cmd "<agent-cli>"
 ```
 
 or without cloning:
@@ -97,24 +97,24 @@ It detects your OS (launchd on macOS, a systemd user timer or cron on Linux), pr
 
 - `--skill cw-sweep` — the only schedulable loop. It defaults to a light `12:30,21:30` cadence and bakes a non-interactive prompt into its wrapper so the headless run does not block on its scope/autofix questions.
 - `--dry-run` — print everything it would write and run, and touch nothing.
-- `--repo owner/repo --repo-dir ~/code/repo --times 12:30,21:30 --yes` — run it unattended.
+- `--repo owner/repo --repo-dir ~/code/repo --times 12:30,21:30 --agent-cmd "<agent-cli>" --yes` — run it unattended.
 - `--uninstall` — remove the schedule (pair with `--skill cw-sweep`).
 
-Nothing is Claude-specific beyond the `claude -p` call inside the generated wrapper; swap it for another runtime's headless command if needed.
+The generated wrapper uses an agent command to run the prompt non-interactively. Set or edit that command for your harness (`claude -p` is one possible command; another harness may use a different CLI or CI action).
 
-**Before you let it run unattended, do one manual run and watch it:** run `/cw-sweep <owner>/<repo>` interactively first with autofix off, to eyeball the escalation surface before letting the scheduled run apply fixes.
+**Before you let it run unattended, do one manual run and watch it:** ask your agent to use the `cw-sweep` skill for `<owner>/<repo>` interactively first with autofix off, to eyeball the escalation surface before letting the scheduled run apply fixes.
 
 ### Other environments
 
 - **Windows, manual control, or scheduling cw-ship anyway:** the per-OS recipes — launchd, cron, a systemd timer, and Windows Task Scheduler — are written out step by step in [`skills/cw-ship/references/scheduling.md`](skills/cw-ship/references/scheduling.md), where scheduling is documented as a deliberate opt-in rather than the default.
-- **GitHub Actions cron (no machine required):** for a scheduled `cw-sweep`, a workflow can run the agent in CI — best for teams. Use [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action) (or your agent's equivalent action) on a `schedule:` trigger; the runner needs a token with merge rights and a bot identity allowed to bypass required review. (`cw-ship` is on-demand — invoke it from an Action manually, e.g. `workflow_dispatch`, rather than on a timer.)
-- **Managed cloud routine:** if your platform offers scheduled agent runs (e.g. Claude Code's `/schedule`), you can point one at `/cw-sweep <owner>/<repo>`. Usually a minimum interval around an hour, and billed. Invoke `/cw-ship` on demand instead of scheduling it.
+- **GitHub Actions cron (no machine required):** for a scheduled `cw-sweep`, a workflow can run the agent in CI — best for teams. Use your harness's CI action on a `schedule:` trigger; the runner needs a token with merge rights and a bot identity allowed to bypass required review. (`cw-ship` is on-demand — invoke it from an Action manually, e.g. `workflow_dispatch`, rather than on a timer.)
+- **Managed cloud routine:** if your platform offers scheduled agent runs, you can point one at a prompt that uses the `cw-sweep` skill for `<owner>/<repo>`. Usually a minimum interval around an hour, and billed. Invoke the `cw-ship` skill on demand instead of scheduling it.
 
 ### Safety, however you run them
 
 - These skills perform real merges. **Scope the agent's auth to the target repo** and start with a dry run — `cw-ship` accepts `build: false` to plan and park without opening PRs.
 - In a headless run, **do not override the permission mode in a way that re-introduces interactive prompts** — a prompt with no human to answer it hangs the loop. Rely on a pre-approved allowlist instead.
-- The everyday loop pages you (`cw-ship` fires a notification when it parks a decision), so even a long unattended `/cw-ship` run keeps you in the loop exactly when a human judgment is needed — and only then.
+- The everyday loop pages you (`cw-ship` fires a notification when it parks a decision), so even a long unattended `cw-ship` run keeps you in the loop exactly when a human judgment is needed — and only then.
 
 ## Status
 

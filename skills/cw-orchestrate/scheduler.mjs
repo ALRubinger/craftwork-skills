@@ -1,7 +1,7 @@
 // Canonical, pure, unit-tested wave scheduler for cw-orchestrate.
 //
 // `workflow.js` inlines a byte-for-byte mirror of `computeWaves` because a
-// Claude Code Workflow script (a) auto-runs its body on evaluation and (b) has
+// Workflow scripts in compatible harnesses may auto-run their body on evaluation and have
 // no filesystem/module access at runtime, so it can neither be imported by a
 // Node test nor import this module. This file is the tested source of truth;
 // keep the mirror in workflow.js in sync. The function is pure: no Date.now(),
@@ -197,7 +197,7 @@ export function transitiveDependents(nodes, halted) {
 // Label-scan pickup + terminal transition (main-session-only).
 //
 // These functions power cw-orchestrate's repo-scan entry path
-// (`/cw-orchestrate <owner>/<repo>`): enumerate every OPEN umbrella carrying
+// (the `cw-orchestrate` repo-scan mode for `<owner>/<repo>`): enumerate every OPEN umbrella carrying
 // `cw-umbrella:ready` (`pickReadyUmbrellas`), and at run's end transition that
 // label from the umbrella's live state — remove it once the umbrella is fully
 // resolved, swap it to `cw-umbrella:needs-input` when only parked work remains
@@ -334,7 +334,7 @@ export function readyLabelTerminalAction(umbrella) {
  *     it. This is the reverse of the `'park'` transition; it fires on the
  *     following scan tick once the blocking sub-issue's park clears — its
  *     `PARKED_SUBISSUE_LABEL` removed, however that release happens (a hand-edit,
- *     or a `/cw-resolve` extended to drain stalled sub-issue parks).
+ *     or the `cw-resolve` skill extended to drain stalled sub-issue parks).
  *   - `'hold'` — still blocked: OPEN with open sub-issues that are all parked.
  *     Leave `cw-umbrella:needs-input`; scans keep skipping it (no churn).
  *

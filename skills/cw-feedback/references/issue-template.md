@@ -35,7 +35,7 @@ have one, but say it's a hint.>
 - **Kind:** <bug | annoyance | enhancement | idea>
 
 <!-- cw-ship appends an "## Open questions" block below this line when it
-     needs your input. Run /cw-resolve to answer (or answer inline and add the
+     needs your input. Invoke the cw-resolve skill to answer (or answer inline and add the
      `cw-feedback:go` label yourself) to resume autonomous execution. -->
 ```
 

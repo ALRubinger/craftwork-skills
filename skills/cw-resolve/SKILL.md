@@ -1,6 +1,6 @@
 ---
 name: cw-resolve
-description: Resolve the parked decisions the autonomous loops couldn't make alone — /cw-ship feedback (cw-feedback:needs-input), /cw-sweep cw-review-residuals (cw-review-residual:needs-input), and /cw-orchestrate stalled sub-issue parks (cw-status:stalled). Find every parked issue, walk you through its open questions, decisions, or stalled forks one at a time with the recommended answer pre-filled, write your answers back into the issue body, and release it (flip to the matching :go label, or remove cw-status:stalled) so the next loop run executes it autonomously. Trigger when the user wants to answer, clear, or review parked questions or decisions.
+description: Resolve the parked decisions the autonomous loops couldn't make alone — the cw-ship skill feedback (cw-feedback:needs-input), the cw-sweep skill cw-review-residuals (cw-review-residual:needs-input), and the cw-orchestrate skill stalled sub-issue parks (cw-status:stalled). Find every parked issue, walk you through its open questions, decisions, or stalled forks one at a time with the recommended answer pre-filled, write your answers back into the issue body, and release it (flip to the matching :go label, or remove cw-status:stalled) so the next loop run executes it autonomously. Trigger when the user wants to answer, clear, or review parked questions or decisions.
 metadata:
   version: "0.1.0"
   triggers:
@@ -22,9 +22,9 @@ Answer the decisions that the autonomous loops parked for you. This is the opera
 This is the **third** skill in the feedback pipeline:
 
 ```
-/cw-feedback        capture     → cw-feedback:new
-/cw-ship plan + act  → auto-merge | PARK to body | umbrella
-/cw-resolve  answer      → cw-feedback:go ──┐  (this skill)
+cw-feedback        capture     → cw-feedback:new
+cw-ship plan + act  → auto-merge | PARK to body | umbrella
+cw-resolve  answer      → cw-feedback:go ──┐  (this skill)
        ▲                                     │
        └────────── next triage run ──────────┘
 ```
@@ -33,13 +33,13 @@ When the loop hits a genuine design fork — a question your original feedback d
 
 ## When to Use
 
-When you want to drain the parked-decision inbox: "answer the feedback questions", "what's waiting on me", "go through the inbox", "decide the residual questions". Covers parked feedback (`cw-feedback:needs-input`), parked cw-review-residual decisions (`cw-review-residual:needs-input`), and stalled sub-issue parks (`cw-status:stalled`). Often prompted by a push notification from a `/cw-ship`, `/cw-sweep`, or `/cw-orchestrate` run that parked something. Do **not** use it to capture new feedback (`/cw-feedback`), to plan/execute feedback (`/cw-ship`), or to triage residuals (`/cw-sweep`).
+When you want to drain the parked-decision inbox: "answer the feedback questions", "what's waiting on me", "go through the inbox", "decide the residual questions". Covers parked feedback (`cw-feedback:needs-input`), parked cw-review-residual decisions (`cw-review-residual:needs-input`), and stalled sub-issue parks (`cw-status:stalled`). Often prompted by a push notification from a `cw-ship`, `cw-sweep`, or `cw-orchestrate` run that parked something. Do **not** use it to capture new feedback (the `cw-feedback` skill), to plan/execute feedback (the `cw-ship` skill), or to triage residuals (the `cw-sweep` skill).
 
 ## Prerequisites
 
 - `gh` (authenticated — `gh auth status`) and `git`.
 - Run from inside the target repo (or pass the repo) so detection works.
-- The `AskUserQuestion` tool (load its schema via `ToolSearch` `select:AskUserQuestion` if needed).
+- A blocking-question capability, if the harness provides one. Otherwise ask directly in chat, one decision at a time.
 
 ## Workflow
 
@@ -68,17 +68,17 @@ Each parked issue carries exactly one of:
 
 - **`## Open questions`** (feedback) — a numbered list of design forks, each often with a recommended answer the planner suggested. (This is the only shape a parked feedback issue takes; umbrella-sized changes are filed by cw-ship directly and never parked for scope approval.)
 - **`## Decision needed`** (cw-review-residual) — a numbered list of judgment calls from residual triage, each with the question, a recommended answer, and the alternatives.
-- **A `<!-- cw:status -->` marker comment** (stalled sub-issue) — **not** a body block. cw-orchestrate's headless scan upserts one comment on the sub-issue formatted `⏸ needs-input: <the unresolved fork>, parked for /cw-resolve` (see [cw-orchestrate Step 3b](../cw-orchestrate/SKILL.md)). The text after `needs-input:` is the fork to settle. Fetch it with `gh issue view <n> --repo <repo> --json comments -q '.comments[].body' | grep 'cw:status'` (or read the comments and find the one marker).
+- **A `<!-- cw:status -->` marker comment** (stalled sub-issue) — **not** a body block. cw-orchestrate's headless scan upserts one comment on the sub-issue formatted `⏸ needs-input: <the unresolved fork>, parked for the cw-resolve skill` (see [cw-orchestrate Step 3b](../cw-orchestrate/SKILL.md)). The text after `needs-input:` is the fork to settle. Fetch it with `gh issue view <n> --repo <repo> --json comments -q '.comments[].body' | grep 'cw:status'` (or read the comments and find the one marker).
 
 Read the whole body for context (for feedback: the Observation / What I want changed; for a residual: the finding and its rationale against the shipped code; for a stalled sub-issue: the sub-issue's own body — what the sub-issue asks for — plus its umbrella), then the parked block or marker comment. Restate the issue to the user in one line before asking, so they have context: "_#137 (annoyance: launch banner repeats): 2 questions._", "_#1010 (cw-review-residual for feature #984): 1 decision._", or "_#992 (stalled sub-issue of umbrella #984): 1 fork parked by cw-orchestrate._"
 
 ### Step 3: Ask, with the recommendation pre-filled
 
-For **open questions**, ask each via `AskUserQuestion`, one question per turn. Lead with the planner's recommended answer as the first option marked "(Recommended)", then realistic alternatives, so the common case is a single tap. Frame options as outcomes, not implementation minutiae. Keep your own recommendation honest — if the planner didn't suggest one and you have a defensible view, offer it; if it's a genuine toss-up, say so.
+For **open questions**, ask each through the harness's blocking-question UI if available, otherwise directly in chat, one question per turn. Lead with the planner's recommended answer as the first option marked "(Recommended)", then realistic alternatives, so the common case is a single tap. Frame options as outcomes, not implementation minutiae. Keep your own recommendation honest — if the planner didn't suggest one and you have a defensible view, offer it; if it's a genuine toss-up, say so.
 
 For a **`## Decision needed`** (cw-review-residual), ask each decision the same way: the `decision_question` as the prompt, the recommended answer first ("(Recommended)"), then the alternatives. These are choices on already-shipped code, so frame them as outcomes ("show the banner once per session" vs "on every run"), not as code changes.
 
-For a **stalled sub-issue** (`cw-status:stalled`), the fork is the text after `needs-input:` in the marker comment. Ask it via `AskUserQuestion` exactly like an open question: read the sub-issue body and its umbrella for context, form a defensible recommendation for the fork, lead with it marked "(Recommended)", then realistic alternatives. Frame options as outcomes (what the sub-issue should build), not implementation minutiae. The scan couldn't settle this fork headlessly; your answer is what makes the sub-issue plannable on the next scan.
+For a **stalled sub-issue** (`cw-status:stalled`), the fork is the text after `needs-input:` in the marker comment. Ask it exactly like an open question: read the sub-issue body and its umbrella for context, form a defensible recommendation for the fork, lead with it marked "(Recommended)", then realistic alternatives. Frame options as outcomes (what the sub-issue should build), not implementation minutiae. The scan couldn't settle this fork headlessly; your answer is what makes the sub-issue plannable on the next scan.
 
 Always allow **skip** — if the user isn't ready to decide an issue, leave it `cw-feedback:needs-input` and move on. Don't force an answer.
 
@@ -126,11 +126,11 @@ For a **stalled sub-issue**, there is **no `:go` label** — the release is simp
 
 ### Step 6: Offer to run the loop now
 
-After clearing the batch, the cleared issues will be executed on the next scheduled tick. Offer to run it immediately instead (`AskUserQuestion`: "Run now on the N cleared issue(s)? / Wait for the next scheduled run"). Route to the right loop per queue:
+After clearing the batch, the cleared issues will be executed on the next scheduled tick. Offer to run it immediately instead through the harness's blocking-question UI if available, or direct chat otherwise: "Run now on the N cleared issue(s)? / Wait for the next scheduled run". Route to the right loop per queue:
 
-- **feedback** issues → invoke `/cw-ship` (optionally `only: [<numbers>]`); it consumes `cw-feedback:go`.
-- **cw-review-residual** issues → invoke `/cw-sweep`; it consumes `cw-review-residual:go` and applies the answered fixes.
-- **stalled sub-issue parks** → invoke `/cw-orchestrate <repo>` (repo-scan mode); its step-0 reconcile restores the umbrella (`cw-umbrella:needs-input` → `cw-umbrella:ready`) and the same scan re-picks it, now routing the resolved sub-issue `route: ready` off the recorded-answer block.
+- **feedback** issues → invoke the `cw-ship` skill (optionally `only: [<numbers>]`); it consumes `cw-feedback:go`.
+- **cw-review-residual** issues → invoke the `cw-sweep` skill; it consumes `cw-review-residual:go` and applies the answered fixes.
+- **stalled sub-issue parks** → invoke the `cw-orchestrate` skill in repo-scan mode for `<repo>`; its step-0 reconcile restores the umbrella (`cw-umbrella:needs-input` → `cw-umbrella:ready`) and the same scan re-picks it, now routing the resolved sub-issue `route: ready` off the recorded-answer block.
 
 If no, report which issues are now released (`:go`, or stalled-label removed) and that the schedule will pick them up.
 
@@ -145,6 +145,6 @@ Summarize: issues released (cleared to `:go`, closed, or had `cw-status:stalled`
 - **Answers are data for a headless re-read.** Write them so the next triage planner can act with zero ambiguity. A vague "**Answer:** sure" re-parks; "**Answer:** show the banner once per session, keyed on the session id" gets built.
 - **One go signal, owned by the user.** This skill is the *only* automated thing that adds `cw-feedback:go` / `cw-review-residual:go` — and it does so only after the user actually answered. Neither loop self-clears a park.
 - **Holds are not parked questions.** `cw-feedback:hold` issues (cataloged but on hold) are *not* drained here — a held issue has no open questions to answer. Release a hold by hand-swapping `cw-feedback:hold` → `cw-feedback:new` (see the [cw-feedback skill](../cw-feedback/SKILL.md)), not through this inbox.
-- **Stalled sub-issue parks are drained here now, and clearing one auto-unblocks its umbrella.** When cw-orchestrate's headless repo-scan hits a sub-issue it can't plan against, it parks that **sub-issue** with `cw-status:stalled` plus a `<!-- cw:status -->` marker comment (`⏸ needs-input: <fork>, parked for /cw-resolve`, not a `## Decision needed` body block), and if that leaves the umbrella with no runnable work it swaps the umbrella `cw-umbrella:ready` → `cw-umbrella:needs-input` so scans stop churning ([cw-orchestrate state machine](../cw-ship/references/state-machine.md)). This inbox now drains that queue too: answer the fork, record it on the **sub-issue body** under a `## Resolved fork` block (Step 4), then **release by removing `cw-status:stalled`** (Step 5) — there is no `:go` label for this kind. Do **not** touch `cw-umbrella:needs-input`: cw-orchestrate's next repo scan detects the cleared park and swaps the umbrella back to `cw-umbrella:ready` on its own (`needsInputTerminalAction` → `'restore'`), then re-picks it and routes the resolved sub-issue `route: ready` off the recorded answer. That closes the loop the "parked for /cw-resolve" comment promised.
+- **Stalled sub-issue parks are drained here now, and clearing one auto-unblocks its umbrella.** When cw-orchestrate's headless repo-scan hits a sub-issue it can't plan against, it parks that **sub-issue** with `cw-status:stalled` plus a `<!-- cw:status -->` marker comment (`⏸ needs-input: <fork>, parked for the cw-resolve skill`, not a `## Decision needed` body block), and if that leaves the umbrella with no runnable work it swaps the umbrella `cw-umbrella:ready` → `cw-umbrella:needs-input` so scans stop churning ([cw-orchestrate state machine](../cw-ship/references/state-machine.md)). This inbox now drains that queue too: answer the fork, record it on the **sub-issue body** under a `## Resolved fork` block (Step 4), then **release by removing `cw-status:stalled`** (Step 5) — there is no `:go` label for this kind. Do **not** touch `cw-umbrella:needs-input`: cw-orchestrate's next repo scan detects the cleared park and swaps the umbrella back to `cw-umbrella:ready` on its own (`needsInputTerminalAction` → `'restore'`), then re-picks it and routes the resolved sub-issue `route: ready` off the recorded answer. That closes the loop the "parked for the cw-resolve skill" comment promised.
 - **Three queues, one habit.** Feedback, cw-review-residual, and stalled sub-issue parks land in the same inbox and clear the same way (read the parked question, answer with the recommendation pre-filled, record the answer, release). cw-sweep can also ask its own escalations inline during an interactive run, but anything left parked — by any loop — drains here.
 - **`gh`/`git` via Bash**, not MCP — matches the rest of the pipeline.
