@@ -2,7 +2,7 @@
 //
 // cw-ship keeps its OWN canonical copy of these helpers (the same way it keeps
 // its own claim.mjs / triage.mjs rather than importing from cw-orchestrate): a
-// Claude Code Workflow script (a) auto-runs its body on evaluation and (b) has
+// Workflow scripts in compatible harnesses may auto-run their body on evaluation and have
 // no filesystem/module access at runtime, so workflow.js can neither import this
 // module nor be imported by a Node test. This file is the tested source of
 // truth; workflow.js inlines a byte-for-byte mirror that tests/mirror.test.mjs

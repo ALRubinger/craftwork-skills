@@ -26,7 +26,7 @@
 //       rationale:  string,
 //       fix_hint:   string | null,
 //       // Present ONLY on findings that need a human (DECISION or low-conf FIX_NOW),
-//       // so the operator can be asked with a recommendation-first AskUserQuestion
+//       // so the operator can be asked with a recommendation-first question
 //       // and the same data can be written into the parked "## Decision needed" block:
 //       decision_question:  string | null,   // one-line question to show the operator
 //       recommended_answer: string | null,   // the planner's pick (first option, "Recommended")
@@ -88,7 +88,7 @@ export function autofixCandidates(results) {
 /**
  * Genuine human decisions on SHIPPED residuals: every DECISION, plus any
  * low-confidence FIX_NOW. Carries the question fields so the caller can render a
- * recommendation-first AskUserQuestion (interactive) or a parked
+ * recommendation-first interactive question or a parked
  * "## Decision needed" block (headless) from one source of truth. Unshipped
  * (shipped === false) residuals are excluded — their findings are deferral
  * placeholders, not real decisions; deferredResiduals() surfaces those instead.

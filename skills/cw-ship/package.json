@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "User-level skill: drain the cw-feedback:new / cw-feedback:go backlog filed by the /cw-feedback skill — plan each against the code, autonomously build+merge the small ones, park design forks to the issue body, and file a ready umbrella for the large ones.",
+  "description": "User-level skill: drain the cw-feedback:new / cw-feedback:go backlog filed by the cw-feedback skill — plan each against the code, autonomously build+merge the small ones, park design forks to the issue body, and file a ready umbrella for the large ones.",
   "scripts": {
     "test": "node --test 'tests/*.test.mjs'"
   }

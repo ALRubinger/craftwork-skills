@@ -41,11 +41,11 @@ The swap is created lazily/idempotently (`gh label create cw-umbrella:needs-inpu
 **Lifecycle owners:**
 
 - **Stamped by** whichever producer files the umbrella — cw-ship (when triage judges a feedback issue umbrella-sized with clear intent; no `cw-feedback:go` gate) or cw-scope (from its interactive brainstorm + decision-preflight) — created lazily/idempotently (`gh label create cw-umbrella:ready ... 2>/dev/null || true`) and added to the umbrella.
-- **Consumed read-only by cw-orchestrate** during pickup and its readiness sweep: it is the "ready for orchestration" marker and, in cw-orchestrate's repo-scan mode (`/cw-orchestrate <owner>/<repo>`), the enumeration key for discovering ready umbrellas. cw-orchestrate never mirrors or re-stamps it.
+- **Consumed read-only by cw-orchestrate** during pickup and its readiness sweep: it is the "ready for orchestration" marker and, in cw-orchestrate's repo-scan mode (the `cw-orchestrate` repo-scan mode for `<owner>/<repo>`), the enumeration key for discovering ready umbrellas. cw-orchestrate never mirrors or re-stamps it.
 - **Transitioned or terminally removed by cw-orchestrate**, all as terminal reconciliation steps (cw-orchestrate SKILL.md Step 7), each reading the umbrella's **live state** (never a second/mirror label), removed/added idempotently (`... 2>/dev/null || true`):
   - **Removed** once the umbrella is **fully resolved** (every sub-issue closed) or the umbrella itself is closed.
   - **Swapped to `cw-umbrella:needs-input`** when the umbrella is still open but its only remaining open work is parked sub-issues (`readyLabelTerminalAction` → `'park'`), so repo-scan mode stops re-picking it every tick.
-  - **Swapped back to `cw-umbrella:ready`** once a park clears and runnable work remains (`needsInputTerminalAction` → `'restore'`), so the next scan re-picks it. `'restore'` fires on the following tick once the blocking sub-issue's park clears — its `cw-status:stalled` removed, however that release happens (a hand-edit, or a `/cw-resolve` extended to drain stalled sub-issue parks).
+  - **Swapped back to `cw-umbrella:ready`** once a park clears and runnable work remains (`needsInputTerminalAction` → `'restore'`), so the next scan re-picks it. `'restore'` fires on the following tick once the blocking sub-issue's park clears — its `cw-status:stalled` removed, however that release happens (a hand-edit, or the `cw-resolve` skill extended to drain stalled sub-issue parks).
 
   A crashed/partial orchestrate run leaves the umbrella not-fully-resolved with `cw-umbrella:ready` intact, so a later scan re-picks it — orchestrate's per-node idempotency makes the re-run self-healing. The no-duplicated-state framing holds throughout: the label is a lifecycle marker (in one of two mutually-exclusive states) retired when the work it gated is done, never a stored mirror of the sub-issue graph.
 
@@ -120,7 +120,7 @@ The merge step is no longer one-rebase-and-bail. When a PR conflicts against a f
 
 `cw-feedback:hold` lets feedback be filed — or flipped after the fact — into the backlog **without** entering the loop. A held issue carries `cw-feedback` + `cw-feedback:hold` and **no other state label**: hold is mutually exclusive with `:new`, `:triaging`, `:needs-input`, and `:go` (the same single-source-of-truth posture as the claim-vs-terminal invariant below — never two state labels at once). The pickup query lists only `:new`, `:go`, and (for the reclaim pass) `:triaging`; it never lists `:hold`, so a held issue is invisible to discovery by construction — no extra filter needed.
 
-**Releasing a hold is an operator action**, parallel to the hand-flip that adds `:go`: swap `cw-feedback:hold` → `cw-feedback:new` (`gh issue edit <n> --add-label cw-feedback:new --remove-label cw-feedback:hold`), and the issue re-enters the loop on the next run as a fresh `:new`. It is **not** released through `/cw-resolve` — a held issue has no parked questions, so cw-resolve has nothing to ask. If a run is scoped directly at a held issue (`/cw-ship --only <n>`), discovery surfaces it as a legible `held` outcome ("on hold, skipped") rather than silently dropping it.
+**Releasing a hold is an operator action**, parallel to the hand-flip that adds `:go`: swap `cw-feedback:hold` → `cw-feedback:new` (`gh issue edit <n> --add-label cw-feedback:new --remove-label cw-feedback:hold`), and the issue re-enters the loop on the next run as a fresh `:new`. It is **not** released through the `cw-resolve` skill — a held issue has no parked questions, so cw-resolve has nothing to ask. If a run is scoped directly at a held issue (`cw-ship` scoped to `only: [<n>]`), discovery surfaces it as a legible `held` outcome ("on hold, skipped") rather than silently dropping it.
 
 ## Parking has exactly one reason: a genuine design fork
 
@@ -132,13 +132,13 @@ The operator's habit is unchanged for the one case that still parks: **read the 
 
 ## The go gate (operator's only routine action)
 
-When a run parks anything, cw-ship's SKILL fires a **push notification** (`escalations` non-empty) so the operator knows input is waiting. The operator then runs **`/cw-resolve`**, which is the mechanism for the go gate: it finds every `cw-feedback:needs-input` issue and, per issue:
+When a run parks anything, cw-ship's SKILL fires a **push notification** (`escalations` non-empty) so the operator knows input is waiting. The operator then runs **the `cw-resolve` skill**, which is the mechanism for the go gate: it finds every `cw-feedback:needs-input` issue and, per issue:
 
 1. Reads the `## Open questions` block.
-2. Asks the operator each question via `AskUserQuestion`, recommended answer first.
+2. Asks the operator each question through the harness's blocking-question UI when available, or direct chat otherwise, recommended answer first.
 3. Writes the answers inline into the body and swaps `cw-feedback:needs-input` → `cw-feedback:go`.
 
-(The operator can also do this by hand on GitHub — answer inline, add `cw-feedback:go` — but the inbox skill is the intended path.) From the moment an issue carries `cw-feedback:go` it is autonomous to merge — no PR review, mirroring cw-orchestrate's "once I say go" contract. The loop never resumes a parked issue without `cw-feedback:go`; it never re-asks a question the operator already answered, because `/cw-resolve` is the *only* automated thing that adds `cw-feedback:go`, and it does so only after a real answer.
+(The operator can also do this by hand on GitHub — answer inline, add `cw-feedback:go` — but the inbox skill is the intended path.) From the moment an issue carries `cw-feedback:go` it is autonomous to merge — no PR review, mirroring cw-orchestrate's "once I say go" contract. The loop never resumes a parked issue without `cw-feedback:go`; it never re-asks a question the operator already answered, because the `cw-resolve` skill is the *only* automated thing that adds `cw-feedback:go`, and it does so only after a real answer.
 
 ## Concurrency: the per-issue claim contract
 
@@ -176,7 +176,7 @@ The both-labels state an operator can hit — an issue carrying `cw-feedback:tri
 
 Do **not** manually reset `cw-feedback:triaging -> cw-feedback:new` to "unstick" an issue: a still-live (possibly orphaned) run may own it, and racing it is what duplicates work. A claim is reclaimable **only when provably dead** by the age rule above (no open PR, no recent `updatedAt`, past `CLAIM_TIMEOUT`), at which point the next loop tick reclaims it automatically.
 
-So a run scoped to a live-claimed issue (`/cw-ship --only <n>` on an issue another run holds) does **not** return a bare empty result — that empty/yielded-with-no-context output is what previously read as "nothing in scope" or "stranded" and invited the wrong manual reset. Discovery instead surfaces it as a first-class **`claimed_elsewhere`** entry `{ issue, url, last_activity, claim_age, reclaim_at }`, and the report renders it as a distinct section: *"held by another run, auto-reclaims at `<reclaim_at>`."* `reclaim_at` is the owning claim's `created_at` plus `CLAIM_TIMEOUT` (computed by `reclaimAtIso` in `claim.mjs`). The operator waits for that instant; the loop self-heals.
+So a run scoped to a live-claimed issue (`cw-ship` scoped to `only: [<n>]` on an issue another run holds) does **not** return a bare empty result — that empty/yielded-with-no-context output is what previously read as "nothing in scope" or "stranded" and invited the wrong manual reset. Discovery instead surfaces it as a first-class **`claimed_elsewhere`** entry `{ issue, url, last_activity, claim_age, reclaim_at }`, and the report renders it as a distinct section: *"held by another run, auto-reclaims at `<reclaim_at>`."* `reclaim_at` is the owning claim's `created_at` plus `CLAIM_TIMEOUT` (computed by `reclaimAtIso` in `claim.mjs`). The operator waits for that instant; the loop self-heals.
 
 ### Idempotency
 

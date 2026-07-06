@@ -1,6 +1,6 @@
 ---
 name: cw-ship
-description: Drain the backlog of dogfooding-feedback issues filed by /cw-feedback. Per issue, plan the change against the actual code, then either autonomously build + squash-merge a single PR (small/medium, intent clear), park genuine design forks back to the issue body for the operator (cw-feedback:needs-input), or — when the change is umbrella-sized and its intent is clear — file a ready umbrella + hand it straight to cw-orchestrate with no approval step. An on-demand tool you invoke (`/cw-ship`), not a background timer. Trigger when the user wants to process, triage, or act on feedback issues.
+description: Drain the backlog of dogfooding-feedback issues filed by the cw-feedback skill. Per issue, plan the change against the actual code, then either autonomously build + squash-merge a single PR (small/medium, intent clear), park genuine design forks back to the issue body for the operator (cw-feedback:needs-input), or — when the change is umbrella-sized and its intent is clear — file a ready umbrella + hand it straight to cw-orchestrate with no approval step. Supports any Agent Skills harness through either compatible workflow execution or portable foreground execution. Trigger when the user wants to process, triage, or act on feedback issues.
 metadata:
   version: "0.1.0"
   triggers:
@@ -26,12 +26,12 @@ The design mirror is deliberate: this is to `cw-orchestrate` what a self-driving
 
 ## When to Use
 
-On demand, when you want to process the feedback backlog: "triage the feedback issues", "run the feedback loop", "act on the feedback for <owner>/<repo>". This is an invoke-it-when-you-want tool, not a background loop; if you nonetheless want to put it on a timer, scheduling is an optional opt-in (see [references/scheduling.md](./references/scheduling.md)). Do **not** use it to capture new feedback (that's `/cw-feedback`) or to execute an existing umbrella (that's `/cw-orchestrate`).
+On demand, when you want to process the feedback backlog: "triage the feedback issues", "run the feedback loop", "act on the feedback for <owner>/<repo>". This is an invoke-it-when-you-want tool, not a background loop; if you nonetheless want to put it on a timer, scheduling is an optional opt-in (see [references/scheduling.md](./references/scheduling.md)). Do **not** use it to capture new feedback (that's the `cw-feedback` skill) or to execute an existing umbrella (that's the `cw-orchestrate` skill).
 
 ## Prerequisites
 
 - `gh` (authenticated — `gh auth status`) and `git`.
-- The **Workflow** tool. The skill launches `workflow.js` via `scriptPath`.
+- A compatible **Workflow** tool if the harness provides one. Otherwise use portable foreground mode; see [agent-harness-portability.md](../cw-orchestrate/references/harness-portability.md).
 - Standing PR-shepherd authorization for this repo family (squash-merge with `--admin`, `--force-with-lease` rebase) — the build path merges unsupervised.
 - Nothing to lock: cw-ship runs are safe to overlap on the same repo. Concurrency is serialized **per issue** by an atomic claim, not by a repo-wide lock (Step 1).
 
@@ -52,9 +52,9 @@ The Workflow handles the claim per issue (Plan stage):
 
 The full claim/recovery contract is the load-bearing part of this skill — see [references/state-machine.md](./references/state-machine.md). The pure resolution logic is in `claim.mjs` (tested in `tests/claim.test.mjs`); `planPrompt` in `workflow.js` implements it via gh.
 
-### Step 2: Launch the Workflow
+### Step 2: Launch the Workflow, or run the portable foreground path
 
-Invoke the **Workflow** tool with `scriptPath` pointing at this skill's `workflow.js` and `args`:
+If the current agent harness can run the bundled Workflow API, invoke the **Workflow** tool with `scriptPath` pointing at this skill's `workflow.js` and `args`:
 
 ```json
 {
@@ -69,7 +69,9 @@ Invoke the **Workflow** tool with `scriptPath` pointing at this skill's `workflo
 - `only` — optional array of specific feedback issue numbers; omit for the whole `cw-feedback:new` / `cw-feedback:go` backlog.
 - `build` defaults to `true`; set `false` for a **dry triage** — plan + park, but open no PRs **and file no umbrellas** (it reports the umbrella disposition and launches no orchestrate). A dry run stays fully dry: it never changes GitHub beyond parking questions. Recommended for a first run on an unfamiliar backlog, then `build: true` once you've seen what it routes — this is the escape hatch for the now-approval-free umbrella path.
 
-The Workflow runs headless in the background; you are notified on completion. Do not poll. Discovery runs first; then every issue flows through plan → resolve **as a streaming pipeline** — each issue routes onward the moment *its own* plan lands, without waiting for the slowest plan in the batch:
+If the harness has no compatible Workflow API, do **not** try to execute `workflow.js` with Node. Run portable foreground mode from [agent-harness-portability.md](../cw-orchestrate/references/harness-portability.md): perform the same discover → plan → resolve phases in this session, using harness-native subagents when available or doing the roles locally. Preserve the same report shape and all labels/body transitions below. The run may be foreground and less parallel, but it must keep the same safety gates.
+
+In Workflow mode, the Workflow runs headless in the background; you are notified on completion. In portable foreground mode, keep the session open until the report is complete. Discovery runs first; then every issue flows through plan → resolve **as a streaming pipeline when the harness supports it** — each issue routes onward the moment *its own* plan lands, without waiting for the slowest plan in the batch:
 
 1. **Discover** — union of open `cw-feedback:new` and `cw-feedback:go` issues, plus any `cw-feedback:triaging` issue whose claim has **crashed** (reclaim). A `cw-feedback:triaging` issue with a still-**live** claim is not built; it is surfaced separately as `claimed_elsewhere` (Step 4) rather than silently dropped.
 2. **Plan** — one subagent per issue: lock the issue (`cw-feedback:triaging`), read intent, research against the code, and route `fix` / `needs-input` / `umbrella`. The planner routes `umbrella` only when it can scope the work correctly itself; if a genuine design fork still shapes the breakdown it routes `needs-input` instead (which parks) — umbrella-ness alone never parks. A `cw-feedback:go` issue carries the operator's inline answers — the planner treats those forks as settled. Plans run concurrently, and each feeds straight into resolve as it completes (no plan barrier).
@@ -77,7 +79,7 @@ The Workflow runs headless in the background; you are notified on completion. Do
 
 ### Step 3: Hand filed umbrellas to cw-orchestrate
 
-The Workflow returns `umbrellas_filed: [{ feedback_issue, umbrella, url, sub_issues }]`. For each, execute it autonomously by running `/cw-orchestrate <umbrella>` — **without asking the operator first.** Do not pause to confirm whether to orchestrate: a filed umbrella is one triage already judged ready, so kicking off its orchestration is part of the same hands-off action. That skill runs its readiness sweep and drives the sub-issues to merged PRs hands-off. (The Workflow deliberately does **not** invoke orchestrate inline: orchestrate needs a manifest from its own sweep, and nesting a multi-hour run inside this one would unbound a scheduled tick — so the launch happens here, in the main session, not as a gate.) In a headless cron run, chain this as a second wrapper step (see scheduling.md); orchestrate is idempotent and keys off the umbrella's `cw-umbrella:ready` label, so a separately-scheduled orchestrate run also picks the umbrella up — no checkpoint on either path.
+The Workflow returns `umbrellas_filed: [{ feedback_issue, umbrella, url, sub_issues }]`. For each, execute it autonomously by running `cw-orchestrate` number mode for `<umbrella>` — **without asking the operator first.** Do not pause to confirm whether to orchestrate: a filed umbrella is one triage already judged ready, so kicking off its orchestration is part of the same hands-off action. That skill runs its readiness sweep and drives the sub-issues to merged PRs hands-off. (The Workflow deliberately does **not** invoke orchestrate inline: orchestrate needs a manifest from its own sweep, and nesting a multi-hour run inside this one would unbound a scheduled tick — so the launch happens here, in the main session, not as a gate.) In a headless cron run, chain this as a second wrapper step (see scheduling.md); orchestrate is idempotent and keys off the umbrella's `cw-umbrella:ready` label, so a separately-scheduled orchestrate run also picks the umbrella up — no checkpoint on either path.
 
 ### Step 4: Surface the report
 
@@ -96,17 +98,17 @@ The Workflow returns:
 
 Render it with the action item first:
 
-- **`escalations`** — the only thing that needs you: each parked issue parked for the one remaining reason (`open-questions` — a genuine design fork), with the questions now in its body. To unblock, run `/cw-resolve` — it walks you through every parked question and flips them to `cw-feedback:go`. Surface these prominently; everything else was handled.
+- **`escalations`** — the only thing that needs you: each parked issue parked for the one remaining reason (`open-questions` — a genuine design fork), with the questions now in its body. To unblock, run the `cw-resolve` skill — it walks you through every parked question and flips them to `cw-feedback:go`. Surface these prominently; everything else was handled.
 - **`claimed_elsewhere`** — issues in scope but **held by another still-live run's claim**; this run did not touch them. Render it as its own section, distinct from `escalations` and from an empty backlog: *"#138 is held by another run, auto-reclaims at `<reclaim_at>` if that run is dead."* This is **not** an action item — do **not** manually reset `cw-feedback:triaging -> cw-feedback:new` to "unstick" it, which races a possibly-live run. The loop auto-reclaims a genuinely dead claim at `reclaim_at` (claim age past `CLAIM_TIMEOUT`, no open PR, no recent activity); wait for that tick. A non-empty `claimed_elsewhere` with an otherwise-empty result means "another run owns this," not "nothing to do."
 - Then summarize what landed: feedback issues merged (`built` where `merged: true`), umbrellas filed (now executing via orchestrate), and anything stalled (`built` where `merged: false`, with cause).
 
 ### Step 4.5: Nudge if anything parked
 
-If `escalations` is non-empty, fire **one** `PushNotification` so the operator knows there's input waiting — this is the trigger that tells them to run `/cw-resolve`. Without it, a parked issue could sit unnoticed until they happen to look. Keep it one line, lead with the count and the action:
+If `escalations` is non-empty and the harness provides a push-notification capability, fire **one** notification so the operator knows there's input waiting — this is the trigger that tells them to run the `cw-resolve` skill. Without that capability, make the final report's first action item the parked-decision count and rely on the issue labels/body as the durable notification. Keep it one line, lead with the count and the action:
 
-> `N feedback issue(s) need your input — run /cw-resolve to clear them. (#137 launch banner, #140 …)`
+> `N feedback issue(s) need your input — invoke the cw-resolve skill to clear them. (#137 launch banner, #140 …)`
 
-Send it only when `escalations.length > 0`; a run that merged everything and parked nothing should stay silent (a no-op notification is the kind that trains the operator to ignore them). Name the first issue or two for context, but don't dump the whole list — the inbox skill is where they'll see it all. In a headless cron run this still fires: `claude -p` has the `PushNotification` tool, and with Remote Control connected it reaches the phone.
+Send it only when `escalations.length > 0`; a run that merged everything and parked nothing should stay silent. Name the first issue or two for context, but don't dump the whole list — the inbox skill is where they'll see it all. In harnesses without push notification, this paragraph is fulfilled by the final report plus the durable `cw-feedback:needs-input` labels.
 
 ### Step 5: Reconcile the issues this run touched (GitHub is the source of truth)
 
@@ -137,10 +139,10 @@ The merge-state gate is what makes this safe to run unattended: a worktree is re
 ## Key Notes
 
 - **The blocking point is a design fork, nothing else.** The loop only stops for a decision your feedback didn't settle. It does not stop to let you review PRs — that's the whole point. If you find yourself wanting to review the small ones, that's a signal to start with `build: false` until you trust the routing, not to add a review gate.
-- **Clearing parks is one action: run `/cw-resolve`.** It finds every `cw-feedback:needs-input` issue, walks you through the questions (recommended answer pre-filled), writes your answers into the body, and adds `cw-feedback:go`. A park-time push notification tells you when there's something to clear. The loop never resumes a parked issue without `cw-feedback:go` and never re-asks an answered question.
+- **Clearing parks is one action: run the `cw-resolve` skill.** It finds every `cw-feedback:needs-input` issue, walks you through the questions (recommended answer pre-filled), writes your answers into the body, and adds `cw-feedback:go`. A park-time push notification tells you when there's something to clear. The loop never resumes a parked issue without `cw-feedback:go` and never re-asks an answered question.
 - **Build conservatism mirrors cw-sweep.** A subagent that hits an unsettled fork mid-build reports `needs-input: <question>` rather than guessing; that issue parks back to you instead of merging a wrong call. Auto-merging a wrong change is worse than parking.
 - **GitHub is the source of truth (Step 5).** A merged change isn't done until GitHub reflects it: the feedback issue closed (the `Closes` keyword usually does this, but a missing keyword is closed as a safety net), its description updated if the change diverged from the captured intent, and any parent/tracker/cross-reference reconciled. Standalone feedback issues make this a near no-op; issues tracked by a parent or referencing others get the same close/tick/update as cw-orchestrate's Step 7. The shared contract is [issue-reconciliation.md](../cw-orchestrate/references/issue-reconciliation.md).
-- **Self-cleaning (Step 6).** All implementation happens in `isolation: 'worktree'` build subagents, never on the default checkout. After the run the main session removes its own `wf_<runId>-*` worktrees and local branches and heals the default-branch checkout — scoped to this run's `workflowRunId` and gated on merge state — so the working copy is left clean on `<defaultBranch>` matching `origin`. This is what keeps many concurrent runs from leaving the shared checkout parked on a feature branch with a divergent local `<defaultBranch>`.
+- **Self-cleaning (Step 6).** In Workflow mode, all implementation happens in `isolation: 'worktree'` build subagents, never on the default checkout. In portable foreground mode, create equivalent explicit `git worktree` checkouts for build work and treat the foreground run id or branch prefix as the cleanup scope. After the run the main session removes its own run-scoped worktrees and local branches and heals the default-branch checkout — scoped to this run and gated on merge state — so the working copy is left clean on `<defaultBranch>` matching `origin`.
 - **Concurrency is per-issue, not per-repo (Step 1).** There is no run lock — N runs may overlap on the same repo. Each issue is serialized by an atomic claim (a `<!-- cw-ship/claim -->` comment + `cw-feedback:triaging`), verified after acquisition (earliest non-stale claim by `created_at`, ties by lowest comment id) so a snapshot→claim race resolves to exactly one owner. No run ever steals another's claim on a liveness guess; a genuinely crashed claim (>2h, no open PR, no recent update) is reclaimable by **age**, never by PID. Every run re-discovers from live labels, so a missed/partial/crashed run self-heals next tick. Contract: [references/state-machine.md](./references/state-machine.md).
 - **Umbrella handoff uses the existing seam, with no approval gate.** This skill files a *ready* umbrella and lets `cw-orchestrate` execute it — it does not reimplement orchestration. Filing and orchestration are both autonomous: an umbrella-sized issue whose intent is clear is filed and handed off directly, with no `cw-feedback:go` gate and no "shall I orchestrate?" confirmation. The only thing that would have stopped it — a genuine design fork — parks as `cw-feedback:needs-input` *instead of* routing umbrella, so by the time an umbrella is filed there is nothing left to approve. (`build: false` is the escape hatch: it reports the umbrella disposition but files nothing.)
 - **Derived issues stay self-contained (Step 2 umbrella authoring).** The umbrella and sub-issues this run files must be executable by cw-orchestrate's headless sweep from the issue text + committed repo alone. The authoring subagent inlines every decision and never carries forward — or strengthens — a reference to an uncommitted/local artifact it inherits from the feedback body (the failure that let a feedback issue cite an uncommitted brainstorm doc as "the planning input"). It verifies any repo path it cites exists on the default branch before citing it. This is the downstream half of `cw-feedback`'s self-containment gate.

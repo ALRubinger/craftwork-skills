@@ -1,22 +1,24 @@
 #!/usr/bin/env bash
 #
-# link-skills.sh — symlink every skill in this repo into your Claude skills dir.
+# link-skills.sh — symlink every skill in this repo into an Agent Skills dir.
 #
 # Walks skills/*/SKILL.md and, for each one, creates a symlink
-#   $CLAUDE_SKILLS_DIR/<skill>  ->  <repo>/skills/<skill>
+#   $AGENT_SKILLS_DIR/<skill>  ->  <repo>/skills/<skill>
 # pointing at the working tree, so edits to a SKILL.md are live the next time
 # you invoke it. Idempotent and re-runnable: links that already point at the
 # right place are left alone, so adding a new skill is just a re-run — nothing
 # goes stale.
 #
-# This is for the *authoring* machine. On machines that only consume the suite,
-# install via the Claude Code plugin marketplace instead (see README).
+# This is for an *authoring* machine. On machines that only consume the suite,
+# install through the target harness's normal Agent Skills installation path.
 #
 # Usage:
-#   bash scripts/link-skills.sh             # link all skills into ~/.claude/skills
+#   bash scripts/link-skills.sh             # link all skills into an existing harness skills dir
 #   bash scripts/link-skills.sh --dry-run   # show what it would do, touch nothing
 #   bash scripts/link-skills.sh --force     # replace conflicting non-matching links
-#   CLAUDE_SKILLS_DIR=/path bash scripts/link-skills.sh   # override target dir
+#   AGENT_SKILLS_DIR=/path bash scripts/link-skills.sh    # override target dir
+#   CODEX_SKILLS_DIR=/path bash scripts/link-skills.sh    # Codex-specific alias
+#   CLAUDE_SKILLS_DIR=/path bash scripts/link-skills.sh   # backwards-compatible alias
 #
 set -euo pipefail
 
@@ -38,7 +40,15 @@ done
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SKILLS_SRC="$REPO_ROOT/skills"
-TARGET_DIR="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
+detect_target_dir() {
+  if [ -n "${AGENT_SKILLS_DIR:-}" ]; then echo "$AGENT_SKILLS_DIR"; return; fi
+  if [ -n "${CODEX_SKILLS_DIR:-}" ]; then echo "$CODEX_SKILLS_DIR"; return; fi
+  if [ -n "${CLAUDE_SKILLS_DIR:-}" ]; then echo "$CLAUDE_SKILLS_DIR"; return; fi
+  if [ -d "$HOME/.codex/skills" ]; then echo "$HOME/.codex/skills"; return; fi
+  if [ -d "$HOME/.claude/skills" ]; then echo "$HOME/.claude/skills"; return; fi
+  echo "$HOME/.agent-skills"
+}
+TARGET_DIR="$(detect_target_dir)"
 
 [ -d "$SKILLS_SRC" ] || die "no skills/ directory under $REPO_ROOT"
 

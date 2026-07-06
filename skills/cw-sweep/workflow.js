@@ -263,7 +263,7 @@ ${
     ? `\nCONSUME MODE: this residual was parked for a decision and the operator has now ANSWERED (label cw-review-residual:go). Its body has a "## Decision needed" block whose entries each carry an "**Answer:** <decision>" line. Treat each answer as the SETTLED decision and re-classify the finding it answers:
 - answer accepts current behavior / "leave as-is" / "no change" => RESOLVED (or MOOT if the finding no longer applies).
 - answer specifies a SMALL, bounded change ("do X", "use Y") that an autofix subagent can land safely and in scope as a single PR => FIX_NOW, confidence "high" (the operator authorized this exact change), fix_hint = the operator's specified change.
-- answer authorizes a FEATURE-SIZED or BROAD change (multi-file, a new subsystem/behavior, or otherwise too large or risky to land unreviewed in one autofix PR) => do NOT mark it high-confidence. High-confidence would route it to close-via-autofix, but the autofix subagent will SKIP an over-large fix and the residual would close having dropped the answered decision. Instead keep DECISION so it RE-PARKS (the label flips back to cw-review-residual:needs-input, breaking the go -> skip -> never-close loop) and emit decision_question/recommended_answer/alt_options that route the authorized-but-large change (e.g. scope it into an umbrella via /cw-scope, or escalate), noting the operator has already approved the intent.
+- answer authorizes a FEATURE-SIZED or BROAD change (multi-file, a new subsystem/behavior, or otherwise too large or risky to land unreviewed in one autofix PR) => do NOT mark it high-confidence. High-confidence would route it to close-via-autofix, but the autofix subagent will SKIP an over-large fix and the residual would close having dropped the answered decision. Instead keep DECISION so it RE-PARKS (the label flips back to cw-review-residual:needs-input, breaking the go -> skip -> never-close loop) and emit decision_question/recommended_answer/alt_options that route the authorized-but-large change (e.g. scope it into an umbrella with the cw-scope skill, or escalate), noting the operator has already approved the intent.
 - answer is genuinely ambiguous or raises a NEW fork => keep DECISION (it will re-park) and emit fresh decision_question/recommended_answer/alt_options.
 Findings with NO operator answer are re-judged normally (below). Leave the cw-review-residual:go label in place — closing the residual (now or via the autofix PR) clears it, a re-park flips it to needs-input, and if it stays open for autofix a re-run re-consumes the same answers idempotently. Do not remove it by hand.\n`
     : ''
@@ -313,7 +313,7 @@ ${JSON.stringify(
   2,
 )}
 \`\`\`
-   End the block with: "_To proceed: answer each decision inline above, then add the \\\`cw-review-residual:go\\\` label (or run /cw-resolve). The next cw-sweep run applies your answers._"
+   End the block with: "_To proceed: answer each decision inline above, then add the \\\`cw-review-residual:go\\\` label (or invoke the cw-resolve skill). The next cw-sweep run applies your answers._"
    Use \`gh issue edit ${tr.residual_issue} --repo ${a.repo} --body-file \"\$D/body.md\"\` (never hand-escape backticks or checklists).
 3. Flip labels to the parked state: \`gh issue edit ${tr.residual_issue} --repo ${a.repo} --add-label cw-review-residual:needs-input --remove-label cw-review-residual:go\` (create cw-review-residual:needs-input first if missing: color D93F0B). Do NOT add cw-review-residual:go — that is the operator's action.
 
@@ -476,7 +476,7 @@ if (runAutofix) {
 }
 
 // --- Park decisions: write the "## Decision needed" block + needs-input -----
-// Durable park for the operator. Headless runs leave these waiting for /cw-resolve;
+// Durable park for the operator. Headless runs leave these waiting for the cw-resolve skill;
 // an interactive caller drains them immediately from report.escalations.
 const parked = [];
 phase('Park');

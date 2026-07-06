@@ -8,18 +8,18 @@
 # path, and run times, offering sensible defaults. Re-runnable and reversible.
 #
 # cw-ship is intentionally NOT schedulable here — it is an on-demand tool you
-# invoke (`/cw-ship <owner>/<repo>`). `--skill cw-sweep` is required.
+# invoke (a `cw-ship` run for `<owner>/<repo>`). `--skill cw-sweep` is required.
 #
 # Usage:
 #   bash install-scheduler.sh --skill cw-sweep               # interactive (cw-sweep)
 #   bash install-scheduler.sh --skill cw-sweep --repo owner/repo \
-#        --repo-dir ~/code/repo --times 12:30,21:30 --yes
+#        --repo-dir ~/code/repo --times 12:30,21:30 --agent-cmd "claude -p" --yes
 #   bash install-scheduler.sh --skill cw-sweep --dry-run     # show what it would do, touch nothing
 #   bash install-scheduler.sh --skill cw-sweep --uninstall   # remove that skill's schedule
 #
 set -euo pipefail
 
-REPO="" ; REPO_DIR="" ; TIMES="" ; SKILL="" ; ACTION="install" ; ASSUME_YES=0 ; DRY=0
+REPO="" ; REPO_DIR="" ; TIMES="" ; SKILL="" ; AGENT_CMD="" ; ACTION="install" ; ASSUME_YES=0 ; DRY=0
 
 die() { echo "error: $*" >&2; exit 1; }
 usage() { sed -n '3,19p' "$0" | sed 's/^#\{0,1\} \{0,1\}//'; }
@@ -30,6 +30,7 @@ while [ $# -gt 0 ]; do
     --repo)      REPO="${2:-}"; shift 2 ;;
     --repo-dir)  REPO_DIR="${2:-}"; shift 2 ;;
     --times)     TIMES="${2:-}"; shift 2 ;;
+    --agent-cmd) AGENT_CMD="${2:-}"; shift 2 ;;
     --uninstall) ACTION="uninstall"; shift ;;
     --dry-run)   DRY=1; shift ;;
     -y|--yes)    ASSUME_YES=1; shift ;;
@@ -41,20 +42,20 @@ done
 # ---------- skill selection ----------
 # The schedulable skill defines its paths, default cadence, and the headless
 # prompt baked into the generated wrapper. cw-sweep is interactive-first, so its
-# prompt pre-answers the scope/autofix questions to keep a `claude -p` run from
+# prompt pre-answers the scope/autofix questions to keep a headless agent run from
 # blocking (and thus no-opping).
 #
 # cw-ship is deliberately not schedulable: it is an on-demand tool you invoke
-# (`/cw-ship <owner>/<repo>`), never a background timer. `--skill cw-sweep` is
+# (a `cw-ship` run for `<owner>/<repo>`), never a background timer. `--skill cw-sweep` is
 # required — there is no default that would register a cw-ship schedule.
-[ -n "$SKILL" ] || die "--skill is required (only cw-sweep is schedulable; cw-ship is on-demand, run '/cw-ship <owner>/<repo>')"
+[ -n "$SKILL" ] || die "--skill is required (only cw-sweep is schedulable; cw-ship is on-demand, ask your agent to use the cw-ship skill for <owner>/<repo>)"
 case "$SKILL" in
   cw-sweep)
     DEFAULT_TIMES="12:30,21:30"
     SKILL_DESC="cw-review-residual backlog drain"
-    PROMPT_LINE='PROMPT="/cw-sweep $REPO — triage the whole open cw-review-residual backlog with autofix enabled. Run fully non-interactively: do not ask for confirmation; default any operator prompt to scope=whole-backlog, autofix=on."'
+    PROMPT_LINE='PROMPT="Use the cw-sweep skill for $REPO to triage the whole open cw-review-residual backlog with autofix enabled. Run fully non-interactively: do not ask for confirmation; default any operator prompt to scope=whole-backlog, autofix=on."'
     WRAPPER_TRAILER="" ;;
-  cw-ship) die "cw-ship is not schedulable — it is an on-demand tool. Run '/cw-ship $REPO' when you want it; schedule cw-sweep with '--skill cw-sweep'." ;;
+  cw-ship) die "cw-ship is not schedulable - it is an on-demand tool. Ask your agent to use the cw-ship skill for $REPO when you want it; schedule cw-sweep with '--skill cw-sweep'." ;;
   *) die "unknown --skill '$SKILL' (only cw-sweep is schedulable)" ;;
 esac
 
@@ -129,11 +130,14 @@ DEF_DIR=""; git rev-parse --show-toplevel >/dev/null 2>&1 && DEF_DIR="$(git rev-
 ask REPO     "GitHub repo $SKILL should triage (owner/repo)" "$(parse_remote .)"
 ask REPO_DIR "Local checkout of that repo (for git context)" "${DEF_DIR:-$HOME/path/to/repo}"
 ask TIMES    "Run times, comma-separated HH:MM (local)"      "$DEFAULT_TIMES"
+ask AGENT_CMD "Non-interactive agent command"                "claude -p"
 
 [ -n "$REPO" ] || die "repo is required (owner/repo)"
 case "$REPO" in */*) : ;; *) die "repo must be 'owner/repo', got '$REPO'" ;; esac
 [ -d "$REPO_DIR/.git" ] || echo "warning: '$REPO_DIR' is not a git checkout — the wrapper's git refresh may fail until you clone it there."
-for b in claude git gh; do command -v "$b" >/dev/null 2>&1 || echo "warning: '$b' not found on PATH (the wrapper sets a PATH for the scheduler, but verify it covers '$b')."; done
+for b in git gh; do command -v "$b" >/dev/null 2>&1 || echo "warning: '$b' not found on PATH (the wrapper sets a PATH for the scheduler, but verify it covers '$b')."; done
+agent_bin="${AGENT_CMD%% *}"
+command -v "$agent_bin" >/dev/null 2>&1 || echo "warning: '$agent_bin' not found on PATH (the wrapper sets a PATH for the scheduler, but verify it covers your agent command)."
 
 MECH="$(resolve_mechanism)"
 echo
@@ -142,6 +146,7 @@ echo "  skill:      $SKILL ($SKILL_DESC)"
 echo "  repo:       $REPO"
 echo "  checkout:   $REPO_DIR"
 echo "  times:      $TIMES (local)"
+echo "  agent cmd:  $AGENT_CMD"
 echo "  mechanism:  $MECH"
 echo "  wrapper:    $WRAPPER"
 echo
@@ -157,6 +162,7 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:\$PATH"   # gh, git,
 
 REPO="$REPO"
 REPO_DIR="$REPO_DIR"
+AGENT_CMD="$AGENT_CMD"
 
 cd "\$REPO_DIR"
 git fetch origin main -q && git checkout main -q && git pull -q --ff-only || true
@@ -164,9 +170,10 @@ git fetch origin main -q && git checkout main -q && git pull -q --ff-only || tru
 $PROMPT_LINE
 
 # Retry loop: a headless run can no-op on a transient classifier/backoff blip.
+read -r -a AGENT_CMD_ARY <<< "\$AGENT_CMD"
 attempt=0
 until [ "\$attempt" -ge 4 ]; do
-  out="\$(claude -p "\$PROMPT" 2>&1)" && rc=0 || rc=\$?
+  out="\$("\${AGENT_CMD_ARY[@]}" "\$PROMPT" 2>&1)" && rc=0 || rc=\$?
   printf '%s\n' "\$out"
   if [ "\$rc" -eq 0 ] && ! printf '%s' "\$out" | grep -qiE 'classifier (briefly )?unavailable|rate.?limit|backoff'; then break; fi
   attempt=\$((attempt + 1)); sleep \$((attempt * 30))
@@ -248,5 +255,5 @@ echo
 echo "Done — $SKILL will run at $TIMES (local), triaging $REPO."
 echo
 echo "Test it now:    $TEST_CMD"
-echo "Dry run first:  claude -p \"/$SKILL $REPO\"   (cw-sweep can run with autofix off for a first pass)"
+echo "Dry run first:  $AGENT_CMD \"Use the $SKILL skill for $REPO.\"   (cw-sweep can run with autofix off for a first pass)"
 echo "Uninstall:      bash $0 --skill $SKILL --uninstall"

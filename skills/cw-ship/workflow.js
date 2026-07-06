@@ -5,9 +5,9 @@
 // issues into merged changes:
 //   - small/medium, no open questions -> branch -> PR (Closes #issue) -> squash-merge
 //   - a genuine design fork remains -> PARK: write the questions into the issue body,
-//     set cw-feedback:needs-input (the operator answers via /cw-resolve, adds cw-feedback:go)
+//     set cw-feedback:needs-input (the operator answers via the `cw-resolve` skill, adds cw-feedback:go)
 //   - umbrella-sized AND intent clear -> file a ready umbrella + sub-issues (no cw-feedback:go
-//     gate); SKILL.md then runs /cw-orchestrate against it to execute autonomously.
+//     gate); SKILL.md then runs the cw-orchestrate skill against it to execute autonomously.
 //     A dry triage (build:false) reports the umbrella disposition but files nothing.
 //
 // Determinism: Workflow scripts forbid Date.now(), Math.random(), and argless
@@ -26,7 +26,7 @@ export const meta = {
   description:
     'Turn captured dogfooding feedback issues into merged changes: plan each against the code, autonomously build+merge the small ones, park the ones needing a design decision (questions synced to the issue body), and file a ready umbrella for the large ones.',
   whenToUse:
-    'On a schedule (or on demand) to drain the cw-feedback:new / cw-feedback:go backlog filed by the /cw-feedback skill.',
+    'On a schedule (or on demand) to drain the cw-feedback:new / cw-feedback:go backlog filed by the cw-feedback skill.',
   phases: [
     { title: 'Discover', detail: 'list open cw-feedback:new / cw-feedback:go issues not already triaging' },
     { title: 'Plan', detail: 'per issue: claim (race-safe), research vs code, route fix | needs-input | umbrella | yielded' },
@@ -288,7 +288,7 @@ function mergeVerdict(m) {
 // Role prompt builders
 // ---------------------------------------------------------------------------
 
-const discoverPrompt = (a) => `You are enumerating open dogfooding-feedback issues in repo ${a.repo} so they can be triaged, using gh via Bash. These were filed by the /cw-feedback skill and follow a label state machine: cw-feedback:new (fresh), cw-feedback:go (the operator answered earlier open questions and cleared the issue to proceed), and cw-feedback:triaging (a run is actively working it). MULTIPLE cw-ship runs can run on this repo at once — there is NO repo lock; the per-issue claim is what serializes work, so a live cw-feedback:triaging issue belongs to another run and you must NOT build it. You DO surface it, but as a distinct \`claimed_elsewhere\` entry (not in \`issues\`), so a run scoped to a live-claimed target reports a legible "held by another run, auto-reclaims at <time>" outcome instead of a bare empty result. The one exception that goes into \`issues\` is a CRASHED claim, which is reclaimable (below).
+const discoverPrompt = (a) => `You are enumerating open dogfooding-feedback issues in repo ${a.repo} so they can be triaged, using gh via Bash. These were filed by the cw-feedback skill and follow a label state machine: cw-feedback:new (fresh), cw-feedback:go (the operator answered earlier open questions and cleared the issue to proceed), and cw-feedback:triaging (a run is actively working it). MULTIPLE cw-ship runs can run on this repo at once — there is NO repo lock; the per-issue claim is what serializes work, so a live cw-feedback:triaging issue belongs to another run and you must NOT build it. You DO surface it, but as a distinct \`claimed_elsewhere\` entry (not in \`issues\`), so a run scoped to a live-claimed target reports a legible "held by another run, auto-reclaims at <time>" outcome instead of a bare empty result. The one exception that goes into \`issues\` is a CRASHED claim, which is reclaimable (below).
 
 There is also a HOLD state, cw-feedback:hold: an issue cataloged in the backlog but intentionally OUT OF SCOPE until an operator hand-swaps :hold -> :new. It is mutually exclusive with every other state label, so an unscoped run never sees it — the entry-state queries below list only :new and :go and never list :hold. You must NOT build a held issue. The ONLY time it matters is an --only run scoped directly at a held issue: surface it in \`held\` (not \`issues\`) so the run reports a legible "on hold, skipped" outcome instead of a bare empty result that looks like "nothing in scope".
 

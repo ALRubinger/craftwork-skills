@@ -1,6 +1,6 @@
 ---
 name: cw-scope
-description: Turn a rough initiative into an execution-ready GitHub umbrella issue — interactively brainstorm the why, resolve every plan-blocking decision, scope the work into orchestrate-able sub-issues, and emit the umbrella + sub-issues on GitHub rich enough that /cw-orchestrate's readiness sweep finds nothing to investigate. Trigger when the user wants to create, scope, plan, or spec an umbrella/tracking/parent issue (the front-end to cw-orchestrate).
+description: Turn a rough initiative into an execution-ready GitHub umbrella issue — interactively brainstorm the why, resolve every plan-blocking decision, scope the work into orchestrate-able sub-issues, and emit the umbrella + sub-issues on GitHub rich enough that the cw-orchestrate skill's readiness sweep finds nothing to investigate. Trigger when the user wants to create, scope, plan, or spec an umbrella/tracking/parent issue (the front-end to cw-orchestrate).
 metadata:
   version: "0.1.0"
   triggers:
@@ -42,7 +42,7 @@ This skill does **not** write briefs or a manifest. It makes the GitHub bodies s
 
 - `gh` (GitHub CLI) — verify `gh auth status`.
 - `git` — run from inside the target repo (or a worktree of it) so repo-instruction files and code are readable.
-- Read access to the repo's `CLAUDE.md` / `AGENTS.md` (and `STRATEGY.md` / `CONCEPTS.md` if present) — their constraints get baked into sub-issue bodies.
+- Read access to the repo's instruction files (`AGENTS.md`, `CLAUDE.md`, and `STRATEGY.md` / `CONCEPTS.md` if present) — their constraints get baked into sub-issue bodies.
 
 ## Reference files
 
@@ -59,13 +59,13 @@ A sub-issue is done being written when an `cw-orchestrate` readiness sweep readi
 
 ### Step 0: Load repository instructions and the target parent
 
-Search the target repo for `CLAUDE.md` / `AGENTS.md` (and `STRATEGY.md` / `CONCEPTS.md`). Extract the constraints that any sub-issue plan must honor — these get copied into every sub-issue's **Constraints** section so the headless planner inherits them. Typical repo-family constraints: spec-is-source-of-truth + regen step, approval-gating ADR, idempotency-flag ADR, conventional commits, squash-merge, coverage bar, docs writing voice, no-backwards-compat.
+Search the target repo for instruction files (`AGENTS.md`, `CLAUDE.md`, and `STRATEGY.md` / `CONCEPTS.md` if present). Extract the constraints that any sub-issue plan must honor — these get copied into every sub-issue's **Constraints** section so the headless planner inherits them. Typical repo-family constraints: spec-is-source-of-truth + regen step, approval-gating ADR, idempotency-flag ADR, conventional commits, squash-merge, coverage bar, docs writing voice, no-backwards-compat.
 
 If the umbrella will be a **child** of an existing parent (e.g. a milestone issue), read the parent now (`gh issue view <parent> --json body,subIssues`) and note **how it links its children** — native sub-issues vs. a body checklist of `#NNN` references. Mirror that convention when linking the umbrella *up* into the parent (Step 6). (This detection is for the up-link only; the umbrella's own sub-issues are always native — see Step 6.)
 
 ### Step 1: Frame the why (interactive)
 
-Elicit the initiative's motivation with the user, one question at a time, using the platform blocking-question tool (`AskUserQuestion`; load its schema via `ToolSearch` with `select:AskUserQuestion` if needed). Capture:
+Elicit the initiative's motivation with the user, one question at a time, using the harness's blocking-question UI if available, or direct chat otherwise. Capture:
 
 - **The problem** — what's wrong or missing, in the user's framing.
 - **The motivation** — why now, what value, what it unblocks. This becomes the umbrella's human-centric "Why".
@@ -86,7 +86,7 @@ Before scoping, map the real footprint so sub-issues cut along true seams, not g
 This is where the skill earns its keep. Follow [references/decision-preflight.md](./references/decision-preflight.md):
 
 - Identify every **plan-blocking** decision — a fork where a headless planner would otherwise pick something and the user should decide instead. Depth/approach, naming, exact user-facing strings (error messages, flags), what to keep vs. remove, idempotency/approval posture for new write surfaces, migration safety.
-- Resolve each with the user via `AskUserQuestion`, one question per turn. Lead with a recommended option when you have one.
+- Resolve each with the user through the harness's blocking-question UI if available, or direct chat otherwise, one question per turn. Lead with a recommended option when you have one.
 - **Mint exact strings now.** If the work introduces a user-facing message, flag, or enum value, decide the literal text here so every downstream sub-issue (code, ADRs, docs) quotes it verbatim. Divergent wording across issues is a classic sweep snag.
 
 Do not ask questions a planner can reasonably decide on its own — those are noise. Ask only the forks whose answers change what gets built.
@@ -105,7 +105,7 @@ With the user, declare **logical** dependency edges between sub-issues — "B's 
 
 ### Step 6: Emit on GitHub (confirm first)
 
-This is the last human checkpoint before writing to shared state. Show the user the umbrella body, the sub-issue list with titles, and the dependency edges, and get an explicit go (`AskUserQuestion`).
+This is the last human checkpoint before writing to shared state. Show the user the umbrella body, the sub-issue list with titles, and the dependency edges, and get an explicit go through the harness's blocking-question UI if available, or direct chat otherwise.
 
 Then create the issues per the [creation recipe](./references/issue-templates.md):
 
@@ -119,7 +119,7 @@ Always use `--body-file` (or a quoted heredoc) — never hand-escape backticks.
 
 ### Step 7: Handoff
 
-Report the created tree (umbrella + sub-issues, with links) and print the exact next invocation: `/cw-orchestrate <umbrella-number>` (optionally with `--only <n>` for a de-risked first run on a dependency-free sub-issue).
+Report the created tree (umbrella + sub-issues, with links) and print the exact next invocation: the `cw-orchestrate` skill in number mode for `<umbrella-number>` (optionally with `--only <n>` for a de-risked first run on a dependency-free sub-issue).
 
 If this initiative changed a decision recorded in durable memory (e.g. a default that this umbrella reverses), update that memory so it reflects the new state — the umbrella is now the source of truth for the change.
 

@@ -1,7 +1,7 @@
 // Canonical, pure, unit-tested triage decision logic for cw-review-residual issues.
 //
 // `workflow.js` inlines a byte-for-byte mirror of these functions because a
-// Claude Code Workflow script (a) auto-runs its body on evaluation and (b) has
+// Workflow scripts in compatible harnesses may auto-run their body on evaluation and have
 // no filesystem/module access at runtime, so it can neither be imported by a
 // Node test nor import this module. This file is the tested source of truth;
 // keep the mirror in workflow.js in sync (mirror.test.mjs enforces it).
