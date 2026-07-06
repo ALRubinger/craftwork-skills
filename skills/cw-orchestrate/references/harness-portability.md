@@ -35,6 +35,31 @@ Every Work-track skill supports two execution modes:
    same state-machine, labels, GitHub issue-body contracts, safety gates, merge
    rules, and reports. Parallelism is optional; correctness is not.
 
+### Codex / native subagent mode
+
+Some harnesses (notably Codex) expose native subagents but no compatible
+Workflow API. In that case, portable foreground mode should still fan out work
+through native subagents whenever the active tool policy allows it:
+
+- Treat an explicit invocation of a Work-track skill (`cw-ship`,
+  `cw-orchestrate`, or `cw-sweep`) as authorization to use the skill's documented
+  worker/subagent fanout, because delegation is part of the requested behavior.
+  Do not stop to ask a second permission question solely because the harness
+  requires explicit user permission for subagents.
+- If the harness tool itself still refuses subagent creation, continue locally
+  and report that the harness rejected delegation. Do not weaken GitHub safety
+  gates or merge rules.
+- Preserve the same division of roles as Workflow mode: planning/review/park
+  tasks may share the primary checkout but must write scratch only under
+  `mktemp -d`; implementation/autofix/build tasks must use explicit
+  run-scoped `git worktree` checkouts; merging remains serialized in the main
+  session.
+- The foreground controller owns orchestration: discover work, spawn eligible
+  native subagents, collect their structured results, dispatch follow-on work as
+  each result lands, perform serialized merges/reconciliation, and clean up
+  run-scoped worktrees. Native subagents replace Workflow `agent(...)` calls;
+  they do not replace the skill's state machine.
+
 Portable foreground mode may be slower and may keep the operator's session open
 for the whole run, but it must not weaken the behavior. In particular:
 

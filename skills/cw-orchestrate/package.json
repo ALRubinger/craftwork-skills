@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "User-level skill: take an umbrella issue's sub-issues to merged PRs via a readiness sweep plus workflow or portable foreground execution.",
+  "description": "User-level skill: take an umbrella issue's sub-issues to merged PRs via a readiness sweep plus workflow, native subagent fanout, or portable foreground execution.",
   "scripts": {
     "test": "node --test 'tests/*.test.mjs'"
   }

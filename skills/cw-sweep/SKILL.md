@@ -1,6 +1,6 @@
 ---
 name: cw-sweep
-description: Triage the backlog of cw-orchestrate `cw-review-residual` issues. Re-judge each filed finding against the code that actually shipped, close the ones already resolved or moot, auto-apply the small high-confidence fixes, and surface only genuine judgment calls. Supports any Agent Skills harness through either compatible workflow execution or portable foreground execution. Trigger when the user wants to clear, triage, or act on cw-review-residual issues out of band from an umbrella run.
+description: Triage the backlog of cw-orchestrate `cw-review-residual` issues. Re-judge each filed finding against the code that actually shipped, close the ones already resolved or moot, auto-apply the small high-confidence fixes, and surface only genuine judgment calls. Supports any Agent Skills harness through compatible workflow execution, native subagent fanout, or portable foreground execution. Trigger when the user wants to clear, triage, or act on cw-review-residual issues out of band from an umbrella run.
 metadata:
   version: "0.1.0"
   triggers:
@@ -30,7 +30,7 @@ When the user wants to triage, clear, or act on `cw-review-residual` issues — 
 ## Prerequisites
 
 - `gh` (authenticated — `gh auth status`) and `git`.
-- A compatible **Workflow** tool if the harness provides one. Otherwise use portable foreground mode; see [../cw-orchestrate/references/harness-portability.md](../cw-orchestrate/references/harness-portability.md).
+- A compatible **Workflow** tool if the harness provides one, or native subagent/delegation tools for foreground fanout. Otherwise use local-only portable foreground mode; see [../cw-orchestrate/references/harness-portability.md](../cw-orchestrate/references/harness-portability.md).
 - A blocking-question capability, if the harness provides one. Otherwise ask the operator directly in chat, one decision at a time.
 - Standing PR-shepherd authorization for this repo family (squash-merge with `--admin`, `--force-with-lease` rebase) — only needed when autofix is enabled.
 
@@ -68,9 +68,9 @@ If the current agent harness can run the bundled Workflow API, invoke the **Work
 - Set at most one of `umbrella` / `only`; omit both for the whole backlog.
 - `autofix` defaults to `true`; set `false` to classify + close only.
 
-If the harness has no compatible Workflow API, do **not** try to execute `workflow.js` with Node. Run portable foreground mode from [agent-harness-portability.md](../cw-orchestrate/references/harness-portability.md): perform the same discover → triage → autofix → park phases in this session, using harness-native subagents when available or doing the roles locally. Preserve the same report shape and all labels/body transitions below. The run may be foreground and less parallel, but it must keep the same safety gates.
+If the harness has no compatible Workflow API, do **not** try to execute `workflow.js` with Node. Run portable foreground mode from [agent-harness-portability.md](../cw-orchestrate/references/harness-portability.md): perform the same discover → triage → autofix → park phases in this session, using harness-native subagents when available or doing the roles locally. In Codex or any harness whose subagent tool requires explicit delegation permission, the user's direct request to run `cw-sweep` is that permission: subagent fanout is part of the skill's documented behavior, so do not stop for a second "may I spawn agents?" prompt. Preserve the same report shape and all labels/body transitions below. The run may be foreground and less parallel, but it must keep the same safety gates.
 
-In Workflow mode, the Workflow runs headless in the background; you are notified on completion. In portable foreground mode, keep the session open until the report is complete. It performs, in order:
+In Workflow mode, the Workflow runs headless in the background; you are notified on completion. In native-subagent foreground mode (for example Codex without a Workflow API), the main session is the controller: it discovers residuals, spawns triage workers, dispatches autofix/park workers from their results, serializes merges itself, and performs reconciliation + cleanup. In local-only foreground mode, keep the same phases in this session without parallel agents. It performs, in order:
 
 1. **Discover** — list in-scope open `cw-review-residual` issues; map each to its tracked sub-issue (from the `Relates to #<n>` line), and read its labels to classify a `human_state`: `fresh`, `needs-input` (parked, awaiting the operator — skipped this run), or `go` (operator answered — triaged in consume mode).
 2. **Triage** — one subagent per `fresh`/`go` residual, in parallel: re-judge each finding against the shipped diff + current files **on the default branch**, post a triage comment, and close the residual if nothing actionable remains. A residual whose sub-issue hasn't shipped is left open and marked deferred. For `go` residuals it runs in **consume mode**: it reads the operator's `**Answer:**` lines under the `## Decision needed` block and re-classifies accordingly (accept → resolved; "do X" → a high-confidence fix).

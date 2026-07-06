@@ -36,14 +36,14 @@ git fetch origin main -q && git checkout main -q && git pull -q --ff-only || tru
 
 attempt=0
 until [ "$attempt" -ge 4 ]; do
-  out="$("${AGENT_CMD[@]}" "Use the cw-ship skill to process $REPO." 2>&1)" && rc=0 || rc=$?
+  out="$("${AGENT_CMD[@]}" "Use the cw-ship skill to process $REPO. You may use native subagents/delegation for the skill's documented worker fanout." 2>&1)" && rc=0 || rc=$?
   printf '%s\n' "$out"
   if [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -qiE 'classifier (briefly )?unavailable|rate.?limit|backoff'; then break; fi
   attempt=$((attempt + 1)); sleep $((attempt * 30))
 done
 
 # Optional: also execute any umbrellas the loop just filed (idempotent). Uncomment to enable.
-# "${AGENT_CMD[@]}" "Use the cw-orchestrate skill in repo-scan mode for $REPO."
+# "${AGENT_CMD[@]}" "Use the cw-orchestrate skill in repo-scan mode for $REPO. You may use native subagents/delegation for the skill's documented worker fanout."
 ```
 
 The optional trailing step wires cw-ship output straight into cw-orchestrate repo-scan mode. That mode for `<owner>/<repo>` (a slug, not a `#number`) discovers **every** OPEN issue carrying `cw-umbrella:ready` — including the ones this very run just filed — and runs each through the hands-off plan → review → work → serial-merge flow **with no interactive sweep** (the label is the upstream clearance — for a cw-ship umbrella that is the triage judgment that filed it, with no separate human approval; see cw-orchestrate's [readiness-sweep.md](../../cw-orchestrate/references/readiness-sweep.md#two-gate-postures)). It is **opt-in**, same posture as everything else in this file: leave it commented for on-demand-only, uncomment to have the scheduled cw-ship tick also drain ready umbrellas.
@@ -142,7 +142,7 @@ journalctl --user -u cw-ship.service -f        # logs
 @echo off
 cd /d %USERPROFILE%\path\to\<repo>
 git fetch origin main -q && git checkout main -q && git pull -q --ff-only
-<agent-cli> "Use the cw-ship skill to process <owner>/<repo>."
+<agent-cli> "Use the cw-ship skill to process <owner>/<repo>. You may use native subagents/delegation for the skill's documented worker fanout."
 ```
 
 Register one task per run time (`schtasks /sc daily` fires once a day):

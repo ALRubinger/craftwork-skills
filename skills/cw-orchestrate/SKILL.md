@@ -1,6 +1,6 @@
 ---
 name: cw-orchestrate
-description: Take a GitHub umbrella issue's sub-issues from "open" to "merged PRs" via one interactive readiness sweep followed by a hands-off workflow when the harness supports it, or a portable foreground run otherwise. Plans, reviews, schedules by dependency, and works each sub-issue through to a serialized squash-merge. Trigger when the user wants to orchestrate, fan out, or batch-execute the sub-issues of a parent/umbrella/tracking issue.
+description: Take a GitHub umbrella issue's sub-issues from "open" to "merged PRs" via one interactive readiness sweep followed by a hands-off workflow when the harness supports it, native subagent fanout when available, or a portable foreground run otherwise. Plans, reviews, schedules by dependency, and works each sub-issue through to a serialized squash-merge. Trigger when the user wants to orchestrate, fan out, or batch-execute the sub-issues of a parent/umbrella/tracking issue.
 metadata:
   version: "0.1.0"
   triggers:
@@ -16,7 +16,7 @@ metadata:
 
 Take a parent (umbrella) issue's open sub-issues from "open" to "merged PRs."
 
-The skill runs **one interactive readiness sweep** in the main session — the single human touchpoint — then writes a per-run **manifest** and launches the hands-off execution phase. If the harness supports the bundled Workflow API, use it. Otherwise, run the same phases in portable foreground mode. After you say "go," no further human input is solicited until the run reports back. Once it does, the main session reconciles GitHub state — closing merged-but-open sub-issues, labeling any sub-issue the run left parked (`cw-status:stalled`/`cw-status:deferred`), and updating the parent issue so GitHub stays the source of truth (Step 7) — then cleans up its own worktrees and branches and heals the checkout to the default branch (Step 8), so a completed run leaves both GitHub and the repo tidy. Every sub-issue's PR lands on the default branch.
+The skill runs **one interactive readiness sweep** in the main session — the single human touchpoint — then writes a per-run **manifest** and launches the hands-off execution phase. If the harness supports the bundled Workflow API, use it. Otherwise, run the same phases in portable foreground mode, using native subagents for the documented plan/review/work roles when available. In Codex or any harness whose subagent tool requires explicit delegation permission, the user's direct request to run `cw-orchestrate` is that permission: subagent fanout is part of the requested orchestration. After you say "go," no further human input is solicited until the run reports back. Once it does, the main session reconciles GitHub state — closing merged-but-open sub-issues, labeling any sub-issue the run left parked (`cw-status:stalled`/`cw-status:deferred`), and updating the parent issue so GitHub stays the source of truth (Step 7) — then cleans up its own worktrees and branches and heals the checkout to the default branch (Step 8), so a completed run leaves both GitHub and the repo tidy. Every sub-issue's PR lands on the default branch.
 
 This skill is umbrella-agnostic: it operates on any parent issue with sub-issues. #989 (agent-auth) is the first run, not a special case.
 
@@ -31,7 +31,7 @@ Do **not** use for a single issue (just plan + work it directly), or when the us
 ### Required tools
 - `gh` (GitHub CLI) — verify `gh auth status`
 - `git`
-- A compatible **Workflow** tool for workflow execution. Without one, use portable foreground mode; see [references/harness-portability.md](./references/harness-portability.md). Do not run `workflow.js` directly with Node.
+- A compatible **Workflow** tool for workflow execution, or native subagent/delegation tools for foreground fanout. Without either, use local-only portable foreground mode; see [references/harness-portability.md](./references/harness-portability.md). Do not run `workflow.js` directly with Node.
 
 ### Required state
 - A GitHub repo with a parent issue that has open sub-issues.
@@ -185,6 +185,8 @@ Then get an explicit **"go"** from the operator using the harness's blocking-que
 After "go," launch the background Workflow with the manifest as `args`:
 
 > Invoke the **Workflow** tool with `scriptPath` pointing at this skill's `workflow.js`, and `args` set to the manifest object (the manifest itself, not a path to it). The Workflow runtime delivers `args` to the script as a JSON **string**, so `workflow.js` parses it before use — pass the object and the script handles marshaling. The Workflow runs headless in the background; you will be notified on completion. Do not poll.
+
+If there is no compatible Workflow API but native subagents are available, do not fall back all the way to single-threaded local execution. Treat the manifest as the controller input for native-subagent foreground mode: the main session spawns plan/review/work/autofix/park subagents according to the phases below, uses explicit run-scoped `git worktree` checkouts for code-writing roles, collects structured results, serializes every merge in the main session, and then performs Step 6-8 reporting, reconciliation, and cleanup. In Codex-style harnesses, the user's `cw-orchestrate` invocation plus the Step 4 "go" authorizes this subagent fanout.
 
 The Workflow runs each sub-issue through a **per-node gated chain** — `plan → review → file-residual → work → merge` — and fires each node's chain the instant **all its predecessors have MERGED** onto the target, so a same-run dependent **plans against its prerequisite's merged output** (not blind, up front). Eligible nodes plan and work **in parallel**; only the merge step is serialized (the merge lock — one PR touches the target at a time). The pure scheduler (`eligible`/`computeWaves`) stays canonical: it decides *which* node is eligible *now*; the change from the old model is purely *when* each node fires, not the edge model. Phases (see `workflow.js` and [references/subagent-roles.md](./references/subagent-roles.md)):
 
