@@ -351,3 +351,20 @@ export function needsInputTerminalAction(umbrella) {
   // Open, with runnable (non-parked) work — a park cleared.
   return 'restore';
 }
+
+// A plan subagent can occasionally return a stub instead of a real plan — the
+// literal "plan_placeholder", an empty body, or a one-line apology — that still
+// satisfies OWNERSHIP_SCHEMA's `minLength: 1`. Sending such a plan into doc-review
+// burns a review + residual cycle on a guaranteed P0 (observed on a real run: a
+// plan body of the token `plan_placeholder` produced a false "no plan to review"
+// P0). isSubstantivePlan is the pure guard the workflow uses to detect a
+// degenerate plan and retry (then stall) instead of forwarding it. A real
+// implementation plan is multi-line prose; treat anything trivially short, or a
+// single bare token, as non-substantive.
+export function isSubstantivePlan(planMarkdown) {
+  if (typeof planMarkdown !== 'string') return false;
+  const trimmed = planMarkdown.trim();
+  if (trimmed.length < 200) return false;
+  if (/^[\w.-]+$/.test(trimmed)) return false;
+  return true;
+}

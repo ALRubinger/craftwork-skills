@@ -11,6 +11,7 @@ import {
   pickReadyUmbrellas,
   readyLabelTerminalAction,
   needsInputTerminalAction,
+  isSubstantivePlan,
   PARKED_SUBISSUE_LABEL,
 } from '../scheduler.mjs';
 
@@ -385,4 +386,38 @@ test('needsInputTerminalAction: all sub-issues closed → remove; closed umbrell
 // Null/edge: no umbrella → 'hold' (safe default; nothing to transition).
 test('needsInputTerminalAction: null → hold', () => {
   assert.equal(needsInputTerminalAction(null), 'hold');
+});
+
+// isSubstantivePlan: the guard that keeps a stub plan out of doc-review.
+test('isSubstantivePlan: rejects the observed plan_placeholder stub', () => {
+  assert.equal(isSubstantivePlan('plan_placeholder'), false);
+});
+
+test('isSubstantivePlan: rejects empty / whitespace / non-string', () => {
+  assert.equal(isSubstantivePlan(''), false);
+  assert.equal(isSubstantivePlan('   \n  '), false);
+  assert.equal(isSubstantivePlan(null), false);
+  assert.equal(isSubstantivePlan(undefined), false);
+  assert.equal(isSubstantivePlan(42), false);
+});
+
+test('isSubstantivePlan: rejects a trivially short one-liner', () => {
+  assert.equal(isSubstantivePlan('TODO: write the plan later'), false);
+});
+
+test('isSubstantivePlan: rejects a single long bare token (no prose)', () => {
+  assert.equal(isSubstantivePlan('a'.repeat(400)), false);
+});
+
+test('isSubstantivePlan: accepts a real multi-line plan', () => {
+  const realPlan = [
+    '## Plan for #123',
+    'Add POST /v1/flightplans/{name}/launch mirroring RunAction.',
+    '- Unit 1: declare the path in openapi.yaml, regenerate.',
+    '- Unit 2: wire runtime.Run in the handler with daemon-backed seams.',
+    '- Unit 3: integration test asserting outputs + audit parity with the CLI path.',
+    'Ownership: internal/api/openapi.yaml, internal/app/handlers_flightplans.go.',
+  ].join('\n');
+  assert.equal(realPlan.length >= 200, true);
+  assert.equal(isSubstantivePlan(realPlan), true);
 });
