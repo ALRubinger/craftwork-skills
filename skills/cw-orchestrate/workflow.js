@@ -270,6 +270,17 @@ function eligible(nodes, merged) {
   return ids.filter((id) => !mergedSet.has(id) && predecessorsMerged(id));
 }
 
+// Mirror of scheduler.mjs isSubstantivePlan (drift-guarded by mirror.test.mjs).
+// A plan subagent can return a stub that satisfies the schema's minLength:1; this
+// guards it so a degenerate plan is retried/stalled instead of sent to review.
+function isSubstantivePlan(planMarkdown) {
+  if (typeof planMarkdown !== 'string') return false;
+  const trimmed = planMarkdown.trim();
+  if (trimmed.length < 200) return false;
+  if (/^[\w.-]+$/.test(trimmed)) return false;
+  return true;
+}
+
 function transitiveDependents(nodes, halted) {
   const ids = nodes.map((n) => n.issue).sort((a, b) => a - b);
   const byId = new Map(nodes.map((n) => [n.issue, n]));
@@ -722,12 +733,40 @@ const triageOne = (subIssue, residualUrl, prUrl) =>
 const isTerminal = (issue) => status.has(issue); // merged or stalled
 
 // Plan -> review -> file-residual for one issue (the deferred head of its chain).
+const PLAN_MAX_ATTEMPTS = 2;
 const planChain = async (it) => {
-  const plan = await agent(planPrompt(manifest, it, briefText.get(it.number) || 'MISSING BRIEF'), {
-    label: `plan:${it.number}`,
-    phase: 'Plan',
-    schema: OWNERSHIP_SCHEMA,
-  });
+  // A plan subagent can occasionally emit a stub (e.g. the literal
+  // "plan_placeholder") that satisfies OWNERSHIP_SCHEMA but is not a real plan.
+  // Guard it: retry up to PLAN_MAX_ATTEMPTS, and if still degenerate, stall the
+  // node with a clear cause rather than forwarding a stub into doc-review (a
+  // guaranteed false P0 that burns a review + residual cycle). A stalled node
+  // becomes a seed the driver cascades to its dependents next pass.
+  let plan = null;
+  for (let attempt = 1; attempt <= PLAN_MAX_ATTEMPTS; attempt++) {
+    const candidate = await agent(
+      planPrompt(manifest, it, briefText.get(it.number) || 'MISSING BRIEF'),
+      {
+        label: attempt === 1 ? `plan:${it.number}` : `plan:${it.number}#${attempt}`,
+        phase: 'Plan',
+        schema: OWNERSHIP_SCHEMA,
+      },
+    );
+    if (candidate && isSubstantivePlan(candidate.plan_markdown)) {
+      plan = candidate;
+      break;
+    }
+    log(
+      `Plan #${it.number}: non-substantive plan (attempt ${attempt}/${PLAN_MAX_ATTEMPTS})` +
+        (attempt < PLAN_MAX_ATTEMPTS ? '; retrying.' : '.'),
+    );
+  }
+  if (!plan) {
+    status.set(it.number, {
+      state: 'stalled',
+      cause: `plan agent returned a non-substantive plan after ${PLAN_MAX_ATTEMPTS} attempts`,
+    });
+    return null;
+  }
   let node = { ...it, ...plan };
   const verdict = await agent(
     reviewPrompt(manifest, it, node.plan_markdown, briefText.get(it.number) || ''),
