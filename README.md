@@ -2,33 +2,29 @@
 
 **You supply the taste. The machine supplies the labor.**
 
-CraftWork is an opinionated suite of agent skills that turns lived-experience feedback into merged pull requests, using **GitHub issues as a durable, asynchronous state machine** and engaging you only at genuine decision points. You observe, you decide, it ships — and the agent does the work in between.
+**Batch your craft; defer the work.** Apply judgment in bursts — capture feedback, make the up-front decisions, review — as durable items, and an agent drains them to merged pull requests in between. You work when you're inspired; the machine labors when you're not. The value is time-shifting: your taste, applied in concentrated bursts, and the labor of turning it into shipped code moved off your critical path.
 
-It is built for [Claude Code](https://claude.com/claude-code) and any agent runtime that supports the [Agent Skills](https://agentskills.io) standard.
+The mechanism is a **durable state machine plus a context engine**. Your craft decisions live as addressable state; CraftWork drives each one to done, engaging you only at genuine decision points. It uses **GitHub issues as that state machine** — your decisions live where your work already lives, with no bespoke database. That's not an arbitrary storage pick: because a GitHub issue is durable, addressable, and notifies you, it's exactly what an *asynchronous decision gate* needs. A question the agent can't answer parks in the issue body and pings you; the run picks up precisely where it left off once you answer.
+
+## Requirements
+
+- **Claude Code.** CraftWork is a Claude Code skill suite. It runs there, and nowhere else.
+- **GitHub.** Issues are the durable, addressable, notifying substrate the async decision gate depends on — your repo and its issues live on GitHub.
+
+## Craft and Work — the two tracks
+
+The name says it: **Craft** is what *you* fire to capture and decide; **Work** is what runs hands-off to merge once you invoke it. The split maps to two tracks that share one philosophy — you hold the taste, the machine holds the labor.
+
+- **Everyday track** — you hit a rough edge while using the product, run `cw-feedback`, and when you're ready you invoke `/cw-ship` to turn the backlog into merged changes. If an item needs a decision, it parks the question into the issue body and pings you; you answer with `cw-resolve` and the next run finishes it on its own.
+- **Initiative track** — for deliberate, multi-PR work you run `cw-scope` to shape it, then `cw-orchestrate` to drive it to done — each sub-issue squash-merging straight to `main` — with `cw-sweep` clearing the review residue.
+
+**Craft:** `cw-feedback`, `cw-resolve`, `cw-scope`. **Work:** `cw-ship`, `cw-orchestrate`, `cw-sweep`.
 
 ## Why it exists
 
 Two systems already cover parts of this space. [Compound Engineering](https://github.com/EveryInc/compound-engineering-plugin) (`ce-`) is a synchronous, in-session craftsman's pipeline you drive by hand. [GitHub Agentic Workflows](https://github.blog/changelog/2026-06-11-github-agentic-workflows-is-now-in-public-preview/) runs discrete, cloud-side automations like issue triage.
 
-CraftWork is the part neither covers: a single loop that starts from **a plain-English reaction while you use your own product**, holds an **asynchronous design-decision gate** (the agent parks the questions it cannot answer into the issue body and waits for you), and then runs **autonomously all the way to merge** once you have cleared it. The human is the conductor. The machine is the orchestra.
-
-## The loop
-
-```
-cw-feedback     capture an observation         -> a GitHub issue
-cw-ship         the autonomous loop            -> build + merge, or park, or escalate
-cw-resolve      answer the parked questions    -> clears work to run autonomously
-cw-scope        scope a large initiative       -> a ready umbrella of sub-issues
-cw-orchestrate  execute a scoped initiative    -> sub-issues driven to merged PRs
-cw-sweep        clean up leftover review notes  -> a tidy backlog
-```
-
-Two tracks share the same philosophy:
-
-- **Everyday track** - you hit a rough edge while using the product, run `cw-feedback`, and when you're ready you invoke `/cw-ship` to turn the backlog into merged changes. If an item needs a decision, it parks the question into the issue body and pings you; you answer with `cw-resolve` and the next run finishes it on its own.
-- **Initiative track** - for deliberate, multi-PR work you run `cw-scope` to shape it, then `cw-orchestrate` to drive it to done — each sub-issue squash-merging straight to `main` — with `cw-sweep` clearing the review residue.
-
-The split maps to the names: **Craft** is what you fire to capture and decide (`cw-feedback`, `cw-resolve`, `cw-scope`); **Work** is what runs hands-off to merge once you invoke it (`cw-ship`, `cw-orchestrate`, `cw-sweep`).
+CraftWork is the part neither covers: it starts from **a plain-English reaction while you use your own product**, holds an **asynchronous design-decision gate** (the agent parks the questions it cannot answer into the issue body and waits for you), and then runs **hands-off all the way to merge** once you have cleared it. The human is the conductor; the machine is the orchestra.
 
 ## The skills
 
@@ -36,7 +32,7 @@ The split maps to the names: **Craft** is what you fire to capture and decide (`
 |-------|-------|--------------|
 | [`cw-feedback`](skills/cw-feedback) | everyday | Capture a plain-English observation as one GitHub issue. |
 | [`cw-ship`](skills/cw-ship) | everyday | On-demand loop you invoke (`/cw-ship`): plan each captured item against the code, build + merge the clear ones, park the rest, escalate the big ones. |
-| [`cw-resolve`](skills/cw-resolve) | everyday | Walk you through the design questions the loop parked, record your answers, release the work. |
+| [`cw-resolve`](skills/cw-resolve) | everyday | Walk you through the design questions `cw-ship` parked, record your answers, release the work. |
 | [`cw-scope`](skills/cw-scope) | initiative | Interactively scope a large initiative into a ready set of sub-issues. |
 | [`cw-orchestrate`](skills/cw-orchestrate) | initiative | Drive a scoped initiative's sub-issues to merged PRs, hands-off. |
 | [`cw-sweep`](skills/cw-sweep) | initiative | Clean up the leftover review findings after an orchestrate run. |
@@ -71,51 +67,44 @@ task link -- --dry-run # preview; --force replaces conflicting links
 
 It's idempotent — re-run it after adding a skill so nothing goes stale. Use this on your authoring machine; use the marketplace on machines that only consume the suite (don't do both, or each skill loads twice).
 
-The Work-track skills (`cw-ship`, `cw-orchestrate`, `cw-sweep`) drive real merges via `gh`/`git` once you invoke them — `cw-ship` and `cw-orchestrate` are on-demand, and `cw-sweep` can optionally be put on a schedule. All three run hands-off to merge. Read each skill's `SKILL.md` before running it, and start with a dry run.
+## Your first loop
 
-## Running the loops
+The everyday track, end to end. All you need is an installed suite and an authenticated `gh` (`gh auth status`).
 
-`cw-ship` is on-demand — you invoke `/cw-ship <owner>/<repo>` when you want the feedback backlog drained, and `cw-orchestrate` likewise runs when you hand it an umbrella. Neither is wired to a timer.
+1. **Capture** a reaction while you're using your product. In Claude Code:
 
-`cw-sweep` is the one loop you may *optionally* put on a schedule, to drain the `cw-review-residual` backlog out of band; `cw-orchestrate` already triages its own residuals in-band, so it does not need one either.
+   ```
+   /cw-feedback
+   ```
 
-### Optional: schedule cw-sweep
+   Say what you noticed in plain English ("the error message on a bad token is useless"). It files **one** GitHub issue labeled `cw-feedback:new`. Do this whenever something grates — it's cheap.
 
-Scheduling is strictly opt-in. If you deliberately want `cw-sweep` running on a timer, the installer sets it up. From a clone of this repo:
+2. **Drain** the backlog when you're ready:
 
-```sh
-bash scripts/install-scheduler.sh --skill cw-sweep
-```
+   ```
+   /cw-ship <owner>/<repo>
+   ```
 
-or without cloning:
+   It plans each captured item against your actual code, builds and squash-merges the clear ones, and parks anything that needs a decision back into the issue body — pinging you when it does.
 
-```sh
-bash <(curl -fsSL https://raw.githubusercontent.com/ALRubinger/craftwork-skills/main/scripts/install-scheduler.sh) --skill cw-sweep
-```
+3. **Decide** on anything it parked:
 
-It detects your OS (launchd on macOS, a systemd user timer or cron on Linux), prompts for the repo, a local checkout path, and run times — with defaults, auto-filled from your current checkout when it can — then writes a wrapper and activates the schedule. `--skill cw-sweep` is required; `cw-ship` is intentionally not schedulable here. Handy flags:
+   ```
+   /cw-resolve
+   ```
 
-- `--skill cw-sweep` — the only schedulable loop. It defaults to a light `12:30,21:30` cadence and bakes a non-interactive prompt into its wrapper so the headless run does not block on its scope/autofix questions.
-- `--dry-run` — print everything it would write and run, and touch nothing.
-- `--repo owner/repo --repo-dir ~/code/repo --times 12:30,21:30 --yes` — run it unattended.
-- `--uninstall` — remove the schedule (pair with `--skill cw-sweep`).
+   It walks you through the open questions one at a time with a recommended answer pre-filled, writes your answers back into the issue, and releases the work. Re-run `/cw-ship <owner>/<repo>` and it finishes those items on its own.
 
-Nothing is Claude-specific beyond the `claude -p` call inside the generated wrapper; swap it for another runtime's headless command if needed.
+That's the whole everyday loop: observe → decide → it ships. The initiative track is the same shape at a larger grain — `cw-scope` to shape a multi-PR effort, `cw-orchestrate` to drive it, `cw-sweep` to tidy up.
 
-**Before you let it run unattended, do one manual run and watch it:** run `/cw-sweep <owner>/<repo>` interactively first with autofix off, to eyeball the escalation surface before letting the scheduled run apply fixes.
+## Safety
 
-### Other environments
+The Work-track skills (`cw-ship`, `cw-orchestrate`, `cw-sweep`) drive real merges via `gh`/`git` once you invoke them. All three are on-demand — you invoke them — and run hands-off to merge from there. Before you turn one loose:
 
-- **Windows, manual control, or scheduling cw-ship anyway:** the per-OS recipes — launchd, cron, a systemd timer, and Windows Task Scheduler — are written out step by step in [`skills/cw-ship/references/scheduling.md`](skills/cw-ship/references/scheduling.md), where scheduling is documented as a deliberate opt-in rather than the default.
-- **GitHub Actions cron (no machine required):** for a scheduled `cw-sweep`, a workflow can run the agent in CI — best for teams. Use [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action) (or your agent's equivalent action) on a `schedule:` trigger; the runner needs a token with merge rights and a bot identity allowed to bypass required review. (`cw-ship` is on-demand — invoke it from an Action manually, e.g. `workflow_dispatch`, rather than on a timer.)
-- **Managed cloud routine:** if your platform offers scheduled agent runs (e.g. Claude Code's `/schedule`), you can point one at `/cw-sweep <owner>/<repo>`. Usually a minimum interval around an hour, and billed. Invoke `/cw-ship` on demand instead of scheduling it.
-
-### Safety, however you run them
-
-- These skills perform real merges. **Scope the agent's auth to the target repo** and start with a dry run — `cw-ship` accepts `build: false` to plan and park without opening PRs.
-- In a headless run, **do not override the permission mode in a way that re-introduces interactive prompts** — a prompt with no human to answer it hangs the loop. Rely on a pre-approved allowlist instead.
-- The everyday loop pages you (`cw-ship` fires a notification when it parks a decision), so even a long unattended `/cw-ship` run keeps you in the loop exactly when a human judgment is needed — and only then.
+- **Scope the agent's auth to the target repo**, and start with a dry run — `cw-ship` accepts `build: false` to plan and park without opening PRs.
+- **Read each skill's `SKILL.md`** before running it.
+- The everyday loop keeps you in the driver's seat: `cw-ship` fires a notification when it parks a decision, so even a long hands-off run reaches you exactly when a human judgment is needed — and only then.
 
 ## Status
 
-Early. Versioned at `0.1.0`. The skill contracts are stable enough to use; the packaging for one-command install is still settling. Issues and ideas welcome.
+Young but usable. The skill contracts are stable enough to build on, and both the everyday and initiative tracks run end to end today. Versioned at `0.1.0`; the one-command packaging is still settling. Issues and ideas welcome.

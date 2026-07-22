@@ -26,7 +26,7 @@ The design mirror is deliberate: this is to `cw-orchestrate` what a self-driving
 
 ## When to Use
 
-On demand, when you want to process the feedback backlog: "triage the feedback issues", "run the feedback loop", "act on the feedback for <owner>/<repo>". This is an invoke-it-when-you-want tool, not a background loop; if you nonetheless want to put it on a timer, scheduling is an optional opt-in (see [references/scheduling.md](./references/scheduling.md)). Do **not** use it to capture new feedback (that's `/cw-feedback`) or to execute an existing umbrella (that's `/cw-orchestrate`).
+On demand, when you want to process the feedback backlog: "triage the feedback issues", "run the feedback loop", "act on the feedback for <owner>/<repo>". This is an invoke-it-when-you-want tool, not a background loop. Do **not** use it to capture new feedback (that's `/cw-feedback`) or to execute an existing umbrella (that's `/cw-orchestrate`).
 
 ## Prerequisites
 
@@ -77,7 +77,7 @@ The Workflow runs headless in the background; you are notified on completion. Do
 
 ### Step 3: Hand filed umbrellas to cw-orchestrate
 
-The Workflow returns `umbrellas_filed: [{ feedback_issue, umbrella, url, sub_issues }]`. For each, execute it autonomously by running `/cw-orchestrate <umbrella>` — **without asking the operator first.** Do not pause to confirm whether to orchestrate: a filed umbrella is one triage already judged ready, so kicking off its orchestration is part of the same hands-off action. That skill runs its readiness sweep and drives the sub-issues to merged PRs hands-off. (The Workflow deliberately does **not** invoke orchestrate inline: orchestrate needs a manifest from its own sweep, and nesting a multi-hour run inside this one would unbound a scheduled tick — so the launch happens here, in the main session, not as a gate.) In a headless cron run, chain this as a second wrapper step (see scheduling.md); orchestrate is idempotent and keys off the umbrella's `cw-umbrella:ready` label, so a separately-scheduled orchestrate run also picks the umbrella up — no checkpoint on either path.
+The Workflow returns `umbrellas_filed: [{ feedback_issue, umbrella, url, sub_issues }]`. For each, execute it autonomously by running `/cw-orchestrate <umbrella>` — **without asking the operator first.** Do not pause to confirm whether to orchestrate: a filed umbrella is one triage already judged ready, so kicking off its orchestration is part of the same hands-off action. That skill runs its readiness sweep and drives the sub-issues to merged PRs hands-off. (The Workflow deliberately does **not** invoke orchestrate inline: orchestrate needs a manifest from its own sweep, and nesting a multi-hour run inside this one would unbound the run — so the launch happens here, in the main session, not as a gate.) In a headless run, chain this as a second step; orchestrate is idempotent and keys off the umbrella's `cw-umbrella:ready` label, so a separate `/cw-orchestrate <owner>/<repo>` repo-scan run also picks the umbrella up — no checkpoint on either path.
 
 ### Step 4: Surface the report
 
@@ -106,7 +106,7 @@ If `escalations` is non-empty, fire **one** `PushNotification` so the operator k
 
 > `N feedback issue(s) need your input — run /cw-resolve to clear them. (#137 launch banner, #140 …)`
 
-Send it only when `escalations.length > 0`; a run that merged everything and parked nothing should stay silent (a no-op notification is the kind that trains the operator to ignore them). Name the first issue or two for context, but don't dump the whole list — the inbox skill is where they'll see it all. In a headless cron run this still fires: `claude -p` has the `PushNotification` tool, and with Remote Control connected it reaches the phone.
+Send it only when `escalations.length > 0`; a run that merged everything and parked nothing should stay silent (a no-op notification is the kind that trains the operator to ignore them). Name the first issue or two for context, but don't dump the whole list — the inbox skill is where they'll see it all. In a headless run this still fires: `claude -p` has the `PushNotification` tool, and with Remote Control connected it reaches the phone.
 
 ### Step 5: Reconcile the issues this run touched (GitHub is the source of truth)
 
