@@ -126,13 +126,13 @@ For a **stalled sub-issue**, there is **no `:go` label** — the release is simp
 
 ### Step 6: Offer to run the loop now
 
-After clearing the batch, the cleared issues will be executed on the next scheduled tick. Offer to run it immediately instead (`AskUserQuestion`: "Run now on the N cleared issue(s)? / Wait for the next scheduled run"). Route to the right loop per queue:
+After clearing the batch, the cleared issues run the next time you invoke the loop. Offer to run it immediately (`AskUserQuestion`: "Run now on the N cleared issue(s)? / Not now"). Route to the right loop per queue:
 
 - **feedback** issues → invoke `/cw-ship` (optionally `only: [<numbers>]`); it consumes `cw-feedback:go`.
 - **cw-review-residual** issues → invoke `/cw-sweep`; it consumes `cw-review-residual:go` and applies the answered fixes.
 - **stalled sub-issue parks** → invoke `/cw-orchestrate <repo>` (repo-scan mode); its step-0 reconcile restores the umbrella (`cw-umbrella:needs-input` → `cw-umbrella:ready`) and the same scan re-picks it, now routing the resolved sub-issue `route: ready` off the recorded-answer block.
 
-If no, report which issues are now released (`:go`, or stalled-label removed) and that the schedule will pick them up.
+If no, report which issues are now released (`:go`, or stalled-label removed); the next loop run you invoke will pick them up.
 
 ### Step 7: Report
 

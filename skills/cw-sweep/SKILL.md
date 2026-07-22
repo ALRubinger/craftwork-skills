@@ -97,7 +97,7 @@ The Workflow returns:
 2. Ask via `AskUserQuestion`, one decision per turn: the `decision_question` as the prompt, `recommended_answer` as the first option marked "(Recommended)", then `alt_options`. Always include a **skip** path — if the operator isn't ready, leave the residual `cw-review-residual:needs-input` and move on.
 3. Write the answer back into the residual body (the `## Decision needed` block) as an `**Answer:** <decision>` line, then advance the label: an accept/no-change answer → close the residual; a "do X" answer → `--add-label cw-review-residual:go --remove-label cw-review-residual:needs-input` so the next sweep applies it. Use `D="$(mktemp -d)"; gh issue view … --json body -q .body > "$D/body.md"` → edit → `gh issue edit … --body-file "$D/body.md"` (scratch in a temp dir, never the checkout; never hand-escape). After clearing a batch, offer to re-run `/cw-sweep` on the `:go` set to apply the answered fixes now.
 
-In a **headless/scheduled run** (you were told to run non-interactively) do **not** answer decisions yourself — the Park step already recorded them as `cw-review-residual:needs-input` for the operator to drain later via `/cw-resolve`. Just report.
+In a **headless run** (you were told to run non-interactively) do **not** answer decisions yourself — the Park step already recorded them as `cw-review-residual:needs-input` for the operator to drain later via `/cw-resolve`. Just report.
 
 Then surface the rest for the operator:
 

@@ -1,6 +1,6 @@
 ---
 name: cw-feedback
-description: Capture plain-English dogfooding feedback about the product you're building while you're using it, enrich it lightly (classify, grab repo + command context, one clarifying question only if truly ambiguous), and file ONE GitHub issue labeled cw-feedback:new that /cw-ship's scheduled loop later turns into a merged change. Trigger when the user wants to record an observation, gripe, or change request about the product they're building ("I don't like X", "feedback:", "log this", "file feedback", "Y should change").
+description: Capture plain-English dogfooding feedback about the product you're building while you're using it, enrich it lightly (classify, grab repo + command context, one clarifying question only if truly ambiguous), and file ONE GitHub issue labeled cw-feedback:new that /cw-ship later turns into a merged change on demand. Trigger when the user wants to record an observation, gripe, or change request about the product they're building ("I don't like X", "feedback:", "log this", "file feedback", "Y should change").
 metadata:
   version: "0.1.0"
   triggers:
@@ -13,14 +13,14 @@ metadata:
 
 # cw-feedback
 
-Capture a piece of real-practice feedback about the product you're building and file it as **one** GitHub issue that a scheduled loop will pick up and turn into a merged change.
+Capture a piece of real-practice feedback about the product you're building and file it as **one** GitHub issue that the on-demand `cw-ship` run will pick up and turn into a merged change.
 
 This skill is the **front-end** to [`cw-ship`](../cw-ship/SKILL.md). The seam is deliberate and mirrors how [`cw-scope`](../cw-scope/SKILL.md) front-ends [`cw-orchestrate`](../cw-orchestrate/SKILL.md):
 
 | Stage | Owner |
 |-------|-------|
 | Plain-English observation → one enriched, labeled GitHub issue | **feedback** (this skill) |
-| Issue → plan → autonomous PR, or parked open questions → merged change | cw-ship's scheduled Workflow |
+| Issue → plan → autonomous PR, or parked open questions → merged change | cw-ship's on-demand Workflow |
 
 Capture is **cheap**. This skill does *not* plan, scope, or open a PR. It records *intent* — what you observed, what you dislike, what you want changed — clearly enough that the headless triage loop can research and act on it. One observation → one issue.
 
