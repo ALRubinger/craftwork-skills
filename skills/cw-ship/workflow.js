@@ -26,7 +26,7 @@ export const meta = {
   description:
     'Turn captured dogfooding feedback issues into merged changes: plan each against the code, autonomously build+merge the small ones, park the ones needing a design decision (questions synced to the issue body), and file a ready umbrella for the large ones.',
   whenToUse:
-    'On a schedule (or on demand) to drain the cw-feedback:new / cw-feedback:go backlog filed by the /cw-feedback skill.',
+    'On demand to drain the cw-feedback:new / cw-feedback:go backlog filed by the /cw-feedback skill.',
   phases: [
     { title: 'Discover', detail: 'list open cw-feedback:new / cw-feedback:go issues not already triaging' },
     { title: 'Plan', detail: 'per issue: claim (race-safe), research vs code, route fix | needs-input | umbrella | yielded' },
